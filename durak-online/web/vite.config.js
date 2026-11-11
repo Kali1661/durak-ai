@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
-// https://vite.dev/config/
-export default defineConfig(({ mode }) => ({
+// A relative base lets the production build be served from any path
+// (a domain root, a sub-folder, GitHub Pages) without rebuilding.
+export default defineConfig({
   plugins: [svelte()],
-  // Set base path for GitHub Pages only in production
-  base: mode === 'production' ? '/durak-online/' : '/',
-}))
+  base: './',
+  worker: { format: 'es' },
+})

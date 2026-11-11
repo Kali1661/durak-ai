@@ -1,3 +1,179 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Design tokens. "Card room": warm paper surfaces around a green felt table,
+ * with brass for whatever needs attention. Values are RGB triplets so Tailwind
+ * can apply opacity. Text/background pairs meet WCAG AA (4.5:1) in both themes.
+ */
+@layer base {
+  :root {
+    --page: 243 238 227;
+    --surface: 255 252 245;
+    --sunken: 236 229 214;
+    --line: 205 194 172;
+    --ink: 31 38 33;
+    --muted: 84 94 86;
+    --accent: 15 98 72;
+    --on-accent: 255 255 255;
+    --gold: 138 90 12;
+    --felt: 27 107 74;
+    --felt-deep: 18 78 53;
+    --on-felt: 244 240 228;
+    --danger: 168 32 26;
+    --attack: 160 62 8;
+    --defend: 24 86 158;
+    color-scheme: light;
+  }
+
+  .dark {
+    --page: 14 20 17;
+    --surface: 24 33 28;
+    --sunken: 17 25 21;
+    --line: 52 68 59;
+    --ink: 232 238 232;
+    --muted: 163 178 168;
+    --accent: 72 196 150;
+    --on-accent: 6 34 24;
+    --gold: 232 184 78;
+    --felt: 22 92 63;
+    --felt-deep: 13 62 42;
+    --on-felt: 240 236 224;
+    --danger: 255 143 130;
+    --attack: 255 176 110;
+    --defend: 140 188 255;
+    color-scheme: dark;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply m-0 min-h-screen bg-page text-ink antialiased;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+
+  /* One visible focus style for every interactive element. */
+  :focus-visible {
+    outline: 3px solid rgb(var(--gold));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  h1, h2, h3 {
+    @apply m-0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-line bg-surface p-4 shadow-sm sm:p-5;
+  }
+
+  .panel-title {
+    @apply font-display text-lg font-bold leading-tight text-ink;
+  }
+
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wider text-muted;
+  }
+
+  /* Buttons: at least 44px tall so they are easy to hit on a phone. */
+  .btn {
+    @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-line bg-surface px-4 py-2 text-sm font-semibold text-ink transition-colors;
+  }
+  .btn:hover:not(:disabled) {
+    @apply bg-sunken;
+  }
+  .btn:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+  .btn-primary {
+    @apply border-accent bg-accent text-on-accent;
+  }
+  .btn-primary:hover:not(:disabled) {
+    @apply bg-accent brightness-110;
+  }
+  .btn-danger {
+    @apply border-danger text-danger;
+  }
+  .btn-sm {
+    @apply min-h-[36px] rounded-lg px-3 py-1 text-xs;
+  }
+
+  /* Segmented control (radio group). */
+  .seg {
+    @apply inline-flex flex-wrap gap-1 rounded-xl border border-line bg-sunken p-1;
+  }
+  .seg-item {
+    @apply min-h-[40px] rounded-lg px-4 py-1.5 text-sm font-semibold text-muted transition-colors;
+  }
+  .seg-item:hover {
+    @apply text-ink;
+  }
+  .seg-item[aria-checked='true'], .seg-item[aria-selected='true'] {
+    @apply bg-surface text-ink shadow-sm ring-1 ring-line;
+  }
+
+  .field {
+    @apply min-h-[44px] w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm text-ink;
+  }
+  .field-label {
+    @apply mb-1 block text-sm font-semibold text-ink;
+  }
+  .field-help {
+    @apply mt-1 text-xs text-muted;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-line bg-sunken px-2 py-0.5 text-xs font-semibold text-ink;
+  }
+  .chip-attack {
+    @apply border-attack/50 bg-attack/10 text-attack;
+  }
+  .chip-defend {
+    @apply border-defend/50 bg-defend/10 text-defend;
+  }
+  .chip-turn {
+    @apply border-gold bg-gold/15 text-gold;
+  }
+  .chip-out {
+    @apply border-dashed text-muted;
+  }
+
+  /* The table itself. */
+  .felt {
+    @apply rounded-2xl border border-felt-deep text-on-felt shadow-inner;
+    background: radial-gradient(ellipse at 50% 35%, rgb(var(--felt)) 0%, rgb(var(--felt-deep)) 100%);
+  }
+
+  .notice {
+    @apply flex items-start gap-3 rounded-xl border px-4 py-3 text-sm;
+  }
+  .notice-error {
+    @apply border-danger/60 bg-danger/10 text-ink;
+  }
+  .notice-info {
+    @apply border-gold/60 bg-gold/10 text-ink;
+  }
+
+  dialog.sheet {
+    @apply w-[min(34rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-0 text-ink shadow-2xl;
+  }
+  dialog.sheet::backdrop {
+    background: rgb(0 0 0 / 0.55);
+  }
+
+  .spinner {
+    @apply inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent;
+  }
+}

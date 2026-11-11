@@ -21,6 +21,7 @@ dependencies = [
  "getrandom",
  "rand",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

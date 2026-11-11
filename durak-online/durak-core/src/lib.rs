@@ -1,12 +1,44 @@
-//! Durak core engine primitives.
+//! Durak core engine: rules, state transitions and a determinized MCTS evaluator.
 //!
-//! This crate focuses on *state transitions* and a minimal
-//! determinization + rollout-based evaluator.
+//! Supported tables: 2 or 3 players, decks of 32-52 cards, six-card hands.
+//!
+//! Rule summary (the variant this engine implements):
+//! * One attack card is played at a time; the defender answers before the next.
+//! * At most [`MAX_PILES`] attack cards per trick, and never more undefended
+//!   cards than the defender holds.
+//! * Throw-in: every attacker may add cards whose rank is already on the table.
+//! * Optional *reflecting*: before defending anything, the defender may play a
+//!   card of the same rank to pass the whole attack to the next player. With
+//!   two players that next player is the original attacker.
+//! * Optional *trump reflecting*: as above, but by showing (not playing) the
+//!   trump of that rank, at most once per trump per trick.
+//! * After a trick, attackers draw first (main attacker first), defender last.
+//! * The game ends when the stock is empty and at most one player holds cards.
+//!   That player is the durak; if nobody holds cards the game is a draw.
+//!
+//! Every public entry point validates its input and returns an error instead of
+//! panicking. [`GameState::legal_actions`] and [`GameState::apply`] agree
+//! exactly: `apply` accepts an action if and only if `legal_actions` lists it,
+//! and a rejected action leaves the state untouched.
+
+mod mcts;
+
+pub use mcts::{
+    mcts_evaluate_actions, solve, ActionEval, MctsEval, SolveParams, SolveResult,
+    MAX_DETERMINIZATIONS, MAX_ROLLOUTS, MAX_SEARCH_DEPTH,
+};
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::collections::HashSet;
+
+/// Cards dealt to each player, and the size hands are refilled to.
+pub const HAND_SIZE: usize = 6;
+/// Maximum number of attack cards (piles) in a single trick.
+pub const MAX_PILES: usize = 6;
+pub const MIN_PLAYERS: usize = 2;
+pub const MAX_PLAYERS: usize = 3;
+pub const SUPPORTED_DECK_SIZES: [usize; 6] = [32, 36, 40, 44, 48, 52];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Suit {
@@ -14,6 +46,10 @@ pub enum Suit {
     Diamonds,
     Hearts,
     Spades,
+}
+
+impl Suit {
+    pub const ALL: [Suit; 4] = [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -34,15 +70,25 @@ pub enum Rank {
     Ace = 14,
 }
 
+impl Rank {
+    pub const ALL: [Rank; 13] = [
+        Rank::Two, Rank::Three, Rank::Four, Rank::Five, Rank::Six, Rank::Seven, Rank::Eight,
+        Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace,
+    ];
+}
+
+/// Suit and rank of a card, ignoring who can see it.
+pub type CardId = (Suit, Rank);
+
 /// A card with visibility - who knows what this card is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Card {
-    /// Everyone knows this card (e.g., played cards, trump card).
+    /// Everyone knows this card (played cards, the trump card, taken cards).
     Public { suit: Suit, rank: Rank },
-    /// Only the holder knows this card (e.g., cards in hand before playing).
+    /// Only the holder knows this card.
     Private { suit: Suit, rank: Rank },
-    /// No one knows this card (e.g., opponent cards in manual mode).
+    /// Not known to the observer (opponent cards and the stock in a real game).
     Unknown,
 }
 
@@ -55,18 +101,22 @@ impl Card {
         Card::Private { suit, rank }
     }
 
-    pub fn suit(&self) -> Suit {
+    /// Suit and rank, or `None` for an unknown card.
+    pub fn id(&self) -> Option<CardId> {
         match self {
-            Card::Public { suit, .. } | Card::Private { suit, .. } => *suit,
-            Card::Unknown => panic!("cannot get suit of unknown card"),
+            Card::Public { suit, rank } | Card::Private { suit, rank } => Some((*suit, *rank)),
+            Card::Unknown => None,
         }
     }
 
+    /// Panics on an unknown card; use [`Card::id`] when that is possible.
+    pub fn suit(&self) -> Suit {
+        self.id().expect("cannot get suit of unknown card").0
+    }
+
+    /// Panics on an unknown card; use [`Card::id`] when that is possible.
     pub fn rank(&self) -> Rank {
-        match self {
-            Card::Public { rank, .. } | Card::Private { rank, .. } => *rank,
-            Card::Unknown => panic!("cannot get rank of unknown card"),
-        }
+        self.id().expect("cannot get rank of unknown card").1
     }
 
     pub fn is_public(&self) -> bool {
@@ -81,32 +131,42 @@ impl Card {
         matches!(self, Card::Unknown)
     }
 
+    /// True if this card beats `other` as a defence. Unknown cards beat nothing.
     pub fn beats(&self, other: &Card, trump: Suit) -> bool {
-        if self.suit() == other.suit() {
-            return self.rank() > other.rank();
+        match (self.id(), other.id()) {
+            (Some((s, r)), Some((os, or))) => {
+                if s == os { r > or } else { s == trump }
+            }
+            _ => false,
         }
-        self.suit() == trump && other.suit() != trump
     }
 
-    /// Check if this card matches another card (same suit and rank, ignoring visibility).
+    /// Same suit and rank, ignoring visibility. Unknown cards match nothing.
     pub fn matches(&self, other: &Card) -> bool {
-        match (self, other) {
-            (Card::Unknown, _) | (_, Card::Unknown) => false,
-            _ => self.suit() == other.suit() && self.rank() == other.rank(),
+        match (self.id(), other.id()) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
         }
     }
 
-    /// Create a copy as public.
     pub fn as_public(&self) -> Self {
-        Card::Public { suit: self.suit(), rank: self.rank() }
+        match self.id() {
+            Some((suit, rank)) => Card::Public { suit, rank },
+            None => Card::Unknown,
+        }
     }
 
-    /// Create a copy as private.
     pub fn as_private(&self) -> Self {
-        Card::Private { suit: self.suit(), rank: self.rank() }
+        match self.id() {
+            Some((suit, rank)) => Card::Private { suit, rank },
+            None => Card::Unknown,
+        }
     }
 }
 
+/// Seat identifier. Only `P0`-`P2` are used by supported games; the remaining
+/// variants exist so that data saved by older versions still parses (and is
+/// then rejected by validation with a clear message).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum PlayerId {
     #[default]
@@ -119,6 +179,11 @@ pub enum PlayerId {
 }
 
 impl PlayerId {
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Seat for an index that is known to be in range (0-5).
     pub fn from_index(i: usize) -> Self {
         match i {
             0 => PlayerId::P0,
@@ -130,32 +195,8 @@ impl PlayerId {
         }
     }
 
-    pub fn other(self) -> PlayerId {
-        match self {
-            PlayerId::P0 => PlayerId::P1,
-            PlayerId::P1 => PlayerId::P0,
-            _ => PlayerId::P0,
-        }
-    }
-
     pub fn next(self, num_players: usize) -> PlayerId {
-        PlayerId::from_index((self as usize + 1) % num_players)
-    }
-
-    /// Get next player, skipping players with empty hands (who are out of the game).
-    pub fn next_active(self, num_players: usize, hands: &[Vec<Card>]) -> PlayerId {
-        let mut next = self.next(num_players);
-        let start = next;
-        loop {
-            if hands[next as usize].len() > 0 {
-                return next;
-            }
-            next = next.next(num_players);
-            if next == start {
-                // All other players are out, return self
-                return self;
-            }
-        }
+        PlayerId::from_index((self.index() + 1) % num_players.max(1))
     }
 }
 
@@ -167,52 +208,67 @@ pub struct Pile {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Phase {
-    /// Attacker may add a card or end attack.
+    /// Current attacker may add a card or pass.
     Attacking,
-    /// Defender must defend an open pile or take.
+    /// Defender must beat the open pile, reflect, or take.
     Defending,
-    /// Defender decided to take; attacker may throw extra cards.
+    /// Defender is taking; attackers may throw in extra cards.
     Throwing,
-}
-
-/// Player type for AI behavior configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum PlayerType {
-    /// Human player - manual input, optional MCTS hints.
-    Human,
-    /// Random AI - picks a random legal action.
-    Random,
-    /// MCTS AI - runs determinized MCTS, picks best action.
-    MCTS,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GameConfig {
-    /// Number of cards in the deck (32, 36, 40, 44, 48, or 52)
+    /// Number of cards in the deck: one of [`SUPPORTED_DECK_SIZES`].
     pub deck_size: usize,
-    /// Number of players (2-6)
+    /// Number of players: 2 or 3.
     pub num_players: usize,
-    /// Trump reflecting: if true, a trump can be reflected back to attacker
+    /// Defender may redirect an attack by showing the trump of the same rank.
     pub trump_reflecting: bool,
-    /// Reflecting: if true, defender can reflect an attack with a card of same rank
+    /// Defender may redirect an attack by playing a card of the same rank.
     pub reflecting: bool,
 }
 
 impl Default for GameConfig {
     fn default() -> Self {
-        Self {
-            deck_size: 36,
-            num_players: 2,
-            trump_reflecting: false,
-            reflecting: false,
-        }
+        Self { deck_size: 36, num_players: 2, trump_reflecting: false, reflecting: false }
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+impl GameConfig {
+    pub fn validate(&self) -> Result<(), EngineError> {
+        if !(MIN_PLAYERS..=MAX_PLAYERS).contains(&self.num_players) {
+            return Err(EngineError::InvalidConfig(format!(
+                "{} players is not supported; choose 2 or 3",
+                self.num_players
+            )));
+        }
+        if !SUPPORTED_DECK_SIZES.contains(&self.deck_size) {
+            return Err(EngineError::InvalidConfig(format!(
+                "a {}-card deck is not supported; choose one of {:?}",
+                self.deck_size, SUPPORTED_DECK_SIZES
+            )));
+        }
+        // Every player gets a full hand and at least the trump card stays in the stock.
+        if self.num_players * HAND_SIZE >= self.deck_size {
+            return Err(EngineError::InvalidConfig(format!(
+                "a {}-card deck is too small to deal {} cards to {} players",
+                self.deck_size, HAND_SIZE, self.num_players
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EngineError {
     #[error("illegal move: {0}")]
     IllegalMove(String),
+    #[error("invalid game settings: {0}")]
+    InvalidConfig(String),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    #[error("invalid game state: {0}")]
+    InvalidState(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -220,307 +276,327 @@ pub enum EngineError {
 pub enum Action {
     /// Attacker plays an attacking card.
     Attack { card: Card },
-    /// Attacker ends attack (like `passattack` in github-durak).
+    /// Attacker stops adding cards.
     PassAttack,
-
-    /// Defender defends a pile.
+    /// Defender beats the open pile.
     Defend { pile_index: usize, card: Card },
-    /// Defender takes the table (like `take`).
+    /// Defender picks up the table.
     Take,
-
-    /// Attacker throws an extra card after a take, or None to finish throwing.
+    /// Attacker throws in a card for a defender who is taking; `None` = done.
     Throw { card: Option<Card> },
-
-    /// Defender reflects with a card of the same rank (requires `config.reflecting`).
-    /// The defender plays the card and the attack is redirected to the next player.
+    /// Defender plays a card of the same rank; the attack moves to the next player.
     Reflect { card: Card },
-
-    /// Defender shows a trump card of the same rank without playing it (requires `config.trump_reflecting`).
-    /// The card stays in hand, but the attack is redirected. Can only be used once per trump per turn.
+    /// Defender shows the trump of the same rank; the attack moves on, the card stays in hand.
     ReflectTrump { card: Card },
+}
+
+impl Action {
+    /// The card this action plays or shows, if any.
+    pub fn card(&self) -> Option<&Card> {
+        match self {
+            Action::Attack { card }
+            | Action::Defend { card, .. }
+            | Action::Reflect { card }
+            | Action::ReflectTrump { card } => Some(card),
+            Action::Throw { card } => card.as_ref(),
+            Action::PassAttack | Action::Take => None,
+        }
+    }
+
+    /// True if both actions are the same move, ignoring card visibility.
+    pub fn same_move(&self, other: &Action) -> bool {
+        use Action::*;
+        match (self, other) {
+            (Attack { card: a }, Attack { card: b })
+            | (Reflect { card: a }, Reflect { card: b })
+            | (ReflectTrump { card: a }, ReflectTrump { card: b }) => a.matches(b),
+            (Defend { pile_index: i, card: a }, Defend { pile_index: j, card: b }) => {
+                i == j && a.matches(b)
+            }
+            (Throw { card: Some(a) }, Throw { card: Some(b) }) => a.matches(b),
+            (Throw { card: None }, Throw { card: None }) | (PassAttack, PassAttack) | (Take, Take) => true,
+            _ => false,
+        }
+    }
+}
+
+/// How a game stands: still running, or finished with a durak or a draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Outcome {
+    InProgress,
+    /// The named player is left holding cards.
+    Durak { player: PlayerId },
+    /// Everybody got rid of their cards.
+    Draw,
 }
 
 /// Game state with full card tracking.
 ///
-/// Cards have visibility (Public/Private/Unknown) to track who knows what.
-/// - Computer mode: All cards are known to the system, private to holders until played.
-/// - Manual mode: Only your cards are known (private), opponents have unknown cards.
-///
-/// Call `determinize(perspective, rng)` before MCTS to create a state where
-/// all cards are known from the perspective player's viewpoint.
+/// Cards carry visibility (Public/Private/Unknown):
+/// - Computer-dealt games: every card is known to the engine, private to its holder until played.
+/// - Real ("manual") games: only the observer's cards are known; the rest are `Unknown`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameState {
-    /// Trump suit.
     pub trump: Suit,
 
-    /// Primary attacker (first in seat order among attackers).
+    /// Main attacker (first of `attackers`).
     pub attacker: PlayerId,
     pub defender: PlayerId,
     pub phase: Phase,
 
-    /// List of players who can attack (all active players except defender).
-    /// The first player is the primary attacker.
+    /// Players who may attack this trick, main attacker first.
     #[serde(default)]
     pub attackers: Vec<PlayerId>,
 
-    /// Index into `attackers` for whose turn it is to attack/throw.
+    /// Index into `attackers` of the player to attack/throw.
     #[serde(default)]
     pub current_attacker_idx: usize,
 
-    /// The attacker who last played a card (used to detect when all attackers have passed).
+    /// The attacker who last played a card (used to detect that everyone passed).
     #[serde(default)]
     pub last_played_attacker: PlayerId,
 
-    /// When throwing starts, the attacker index where we started (to detect completion).
+    /// Attacker index at which throwing started (used to detect completion).
     #[serde(default)]
     pub throw_start_idx: usize,
 
-    /// Player hands. Each card has visibility indicating who knows it.
     pub hands: Vec<Vec<Card>>,
 
-    /// The stock pile (draw pile). Cards are drawn from the end (pop).
-    /// In computer mode: bottom card is public (trump), rest are private.
-    /// In manual mode: bottom card is public (trump), rest are unknown.
+    /// Draw pile; cards are drawn from the end. `stock[0]` is the face-up trump card.
     pub stock: Vec<Card>,
 
     pub table: Vec<Pile>,
     pub discard: Vec<Card>,
 
-    /// Trump cards that have been shown via ReflectTrump this turn (cannot be used again).
+    /// Trumps already shown via `ReflectTrump` this trick.
     #[serde(default)]
     pub reflected_trumps: Vec<Card>,
 
-    /// Game configuration.
     pub config: GameConfig,
 }
 
+fn invalid_state<T>(msg: impl Into<String>) -> Result<T, EngineError> {
+    Err(EngineError::InvalidState(msg.into()))
+}
+
+fn invalid_input<T>(msg: impl Into<String>) -> Result<T, EngineError> {
+    Err(EngineError::InvalidInput(msg.into()))
+}
+
+fn illegal<T>(msg: impl Into<String>) -> Result<T, EngineError> {
+    Err(EngineError::IllegalMove(msg.into()))
+}
+
+/// Ranks used by a deck of the given size, lowest first.
+pub fn deck_ranks(deck_size: usize) -> Result<&'static [Rank], EngineError> {
+    if !SUPPORTED_DECK_SIZES.contains(&deck_size) {
+        return Err(EngineError::InvalidConfig(format!(
+            "a {deck_size}-card deck is not supported; choose one of {SUPPORTED_DECK_SIZES:?}"
+        )));
+    }
+    Ok(&Rank::ALL[Rank::ALL.len() - deck_size / 4..])
+}
+
+/// Every card of a deck, as private cards in a fixed order.
+pub fn full_deck(deck_size: usize) -> Result<Vec<Card>, EngineError> {
+    let ranks = deck_ranks(deck_size)?;
+    let mut out = Vec::with_capacity(deck_size);
+    for s in Suit::ALL {
+        for r in ranks {
+            out.push(Card::private(s, *r));
+        }
+    }
+    Ok(out)
+}
+
+fn deck_ids(deck_size: usize) -> Result<HashSet<CardId>, EngineError> {
+    Ok(full_deck(deck_size)?.iter().filter_map(Card::id).collect())
+}
+
+fn seat(index: usize, num_players: usize, what: &str) -> Result<PlayerId, EngineError> {
+    if index >= num_players {
+        return invalid_input(format!(
+            "{what} is player {index}, but this game only has players 0-{}",
+            num_players - 1
+        ));
+    }
+    Ok(PlayerId::from_index(index))
+}
+
+fn initial_attackers(attacker: PlayerId, defender: PlayerId, num_players: usize) -> Vec<PlayerId> {
+    let mut attackers = Vec::with_capacity(num_players - 1);
+    let mut pid = attacker;
+    for _ in 0..num_players {
+        if pid != defender {
+            attackers.push(pid);
+        }
+        pid = pid.next(num_players);
+    }
+    attackers
+}
+
 impl GameState {
-    /// Build the list of attackers for a new trick.
-    /// Attackers are all active players excluding the defender.
-    /// The primary attacker (main_attacker) should be first in the list.
-    fn build_attackers(&self, main_attacker: PlayerId) -> Vec<PlayerId> {
-        let num_players = self.num_players();
-        let mut attackers = Vec::with_capacity(num_players - 1);
+    // ─────────────────────────────────────────────────────────────────────
+    // Construction
+    // ─────────────────────────────────────────────────────────────────────
 
-        // Start from main_attacker and go around, adding players who are still in the game
-        let mut pid = main_attacker;
-        for _ in 0..num_players {
-            if pid != self.defender && self.is_player_active(pid) {
-                attackers.push(pid);
-            }
-            pid = pid.next(num_players);
-        }
-
-        attackers
-    }
-
-    /// Check if a player is still in the game (has cards or can draw).
-    fn is_player_active(&self, pid: PlayerId) -> bool {
-        self.hand_size(pid) > 0 || !self.stock.is_empty()
-    }
-
-    /// Find the next active player after the given player.
-    fn next_active_player(&self, from: PlayerId) -> PlayerId {
-        let num_players = self.num_players();
-        let mut pid = from.next(num_players);
-        let start = pid;
-        loop {
-            if self.is_player_active(pid) {
-                return pid;
-            }
-            pid = pid.next(num_players);
-            if pid == start {
-                return from; // No active player found, return original
-            }
-        }
-    }
-
-    /// Start a new trick with the given main attacker.
-    fn new_trick(&mut self, main_attacker: PlayerId) {
-        // If main_attacker is out of the game, find next active player
-        let main_attacker = if self.is_player_active(main_attacker) {
-            main_attacker
-        } else {
-            self.next_active_player(main_attacker)
-        };
-
-        // Find the defender (next active player after main_attacker)
-        let defender = self.next_active_player(main_attacker);
-
-        self.attacker = main_attacker;
-        self.defender = defender;
-        self.attackers = self.build_attackers(main_attacker);
-        self.current_attacker_idx = 0;
-        self.last_played_attacker = main_attacker;
-        self.throw_start_idx = 0;
-        self.phase = Phase::Attacking;
-        self.reflected_trumps.clear();
-        self.table.clear();
-    }
-
-    /// Create a new computer game with shuffled deck.
-    /// All cards are known to the system but private to their holders until played.
-    pub fn new_computer_game(seed: u64, config: GameConfig) -> Self {
+    /// Deal a new game from a seeded shuffle. Every card is known to the
+    /// engine; each player's lowest trump is public and the holder of the
+    /// lowest trump overall attacks first (P0 if nobody holds a trump).
+    pub fn new_computer_game(seed: u64, config: GameConfig) -> Result<Self, EngineError> {
+        config.validate()?;
         let mut rng = StdRng::seed_from_u64(seed);
 
-        // Create a deck of private cards and shuffle it
-        let mut deck = full_deck(config.deck_size);
+        let mut deck = full_deck(config.deck_size)?;
         for i in (1..deck.len()).rev() {
             let j = rng.gen_range(0..=i);
             deck.swap(i, j);
         }
 
-        // Trump card is at the bottom (last card), public
+        // The trump card sits face-up at the bottom of the stock.
         deck[0] = deck[0].as_public();
         let trump = deck[0].suit();
 
-        // Deal 6 cards to each player (private)
-        // Track who has the lowest trump to determine starting player
         let mut hands: Vec<Vec<Card>> = Vec::with_capacity(config.num_players);
-        let mut lowest_trump: Option<(usize, Rank)> = None; // (player_index, rank)
+        let mut lowest_trump: Option<(usize, Rank)> = None;
 
         for player_idx in 0..config.num_players {
-            let mut hand: Vec<Card> = deck.drain(deck.len() - 6..).collect();
-
-            // Find lowest trump and make it public (announced at game start)
-            if let Some(lowest_trump_idx) = hand.iter()
+            let mut hand: Vec<Card> = deck.drain(deck.len() - HAND_SIZE..).collect();
+            let lowest = hand
+                .iter()
                 .enumerate()
                 .filter(|(_, c)| c.suit() == trump)
-                .min_by_key(|(_, c)| c.rank() as u8)
-                .map(|(i, _)| i)
-            {
-                let rank = hand[lowest_trump_idx].rank();
-                hand[lowest_trump_idx] = hand[lowest_trump_idx].as_public();
-
-                // Track global lowest trump
+                .min_by_key(|(_, c)| c.rank())
+                .map(|(i, c)| (i, c.rank()));
+            if let Some((i, rank)) = lowest {
+                hand[i] = hand[i].as_public();
                 if lowest_trump.map_or(true, |(_, r)| rank < r) {
                     lowest_trump = Some((player_idx, rank));
                 }
             }
-
             hands.push(hand);
         }
 
-        // Remaining cards are the stock (private, except trump at bottom)
-        let stock: Vec<Card> = deck;
-
-        // Player with lowest trump starts, default to P0 if no one has trumps
         let attacker = PlayerId::from_index(lowest_trump.map_or(0, |(idx, _)| idx));
         let defender = attacker.next(config.num_players);
 
-        // Build attackers list (all players except defender)
-        let mut attackers = Vec::with_capacity(config.num_players - 1);
-        let mut pid = attacker;
-        for _ in 0..config.num_players {
-            if pid != defender {
-                attackers.push(pid);
-            }
-            pid = pid.next(config.num_players);
-        }
-
-        Self {
+        let state = Self {
             trump,
             attacker,
             defender,
             phase: Phase::Attacking,
-            attackers,
+            attackers: initial_attackers(attacker, defender, config.num_players),
             current_attacker_idx: 0,
             last_played_attacker: attacker,
             throw_start_idx: 0,
             hands,
-            stock,
+            stock: deck,
             table: vec![],
             discard: vec![],
             reflected_trumps: vec![],
             config,
-        }
+        };
+        state.validate()?;
+        Ok(state)
     }
 
-    /// Create a manual game where only your hand is known.
-    /// Your cards are private, opponent cards are unknown.
+    /// Start tracking a real game in which only the observer's (P0's) hand is known.
+    ///
+    /// `opponent_trumps` optionally records a trump an opponent has shown
+    /// (`None` = nothing shown); those cards become public knowledge.
     pub fn new_manual_game(
         trump_card: Card,
         player_hand: Vec<Card>,
         starting_player: u8,
-        opponent_lowest_trumps: Vec<(PlayerId, Option<Rank>)>,
+        opponent_trumps: Vec<(PlayerId, Option<Rank>)>,
         config: GameConfig,
     ) -> Result<Self, EngineError> {
-        if player_hand.len() != 6 {
-            return Err(EngineError::IllegalMove(
-                "manual start requires exactly 6 cards in your hand".into(),
+        config.validate()?;
+        let n = config.num_players;
+        let deck = deck_ids(config.deck_size)?;
+
+        let Some(trump_id) = trump_card.id() else {
+            return invalid_input("the trump card must be a known card");
+        };
+        if !deck.contains(&trump_id) {
+            return invalid_input(format!(
+                "the trump card is not part of a {}-card deck",
+                config.deck_size
             ));
         }
+        let trump = trump_id.0;
 
-        let trump = trump_card.suit();
-
-        // Build P0's hand (private, except lowest trump which is public)
-        let mut p0_hand: Vec<Card> = player_hand.iter()
-            .map(|c| c.as_private())
-            .collect();
-
-        // Make lowest trump public
-        if let Some(lowest_trump_idx) = p0_hand.iter()
-            .enumerate()
-            .filter(|(_, c)| c.suit() == trump)
-            .min_by_key(|(_, c)| c.rank() as u8)
-            .map(|(i, _)| i)
-        {
-            p0_hand[lowest_trump_idx] = p0_hand[lowest_trump_idx].as_public();
+        if player_hand.len() != HAND_SIZE {
+            return invalid_input(format!(
+                "your starting hand must have exactly {HAND_SIZE} cards, got {}",
+                player_hand.len()
+            ));
         }
-
-        let mut hands: Vec<Vec<Card>> = Vec::with_capacity(config.num_players);
-        hands.push(p0_hand);
-
-        // Opponents: declared lowest trump is public, rest are unknown
-        for i in 1..config.num_players {
-            let pid = PlayerId::from_index(i);
-            let lowest_trump_rank = opponent_lowest_trumps
-                .iter()
-                .find(|(p, _)| *p == pid)
-                .and_then(|(_, rank_opt)| *rank_opt);
-
-            let mut hand = Vec::with_capacity(6);
-
-            // Add the declared lowest trump as public if specified
-            if let Some(rank) = lowest_trump_rank {
-                hand.push(Card::public(trump, rank));
+        let mut seen: HashSet<CardId> = HashSet::new();
+        seen.insert(trump_id);
+        for card in &player_hand {
+            let Some(id) = card.id() else {
+                return invalid_input("your starting hand cannot contain unknown cards");
+            };
+            if !deck.contains(&id) {
+                return invalid_input(format!(
+                    "{id:?} is not part of a {}-card deck",
+                    config.deck_size
+                ));
             }
-
-            // Fill rest with unknown cards
-            while hand.len() < 6 {
-                hand.push(Card::Unknown);
+            if id == trump_id {
+                return invalid_input("the trump card cannot also be in your hand");
             }
-
-            hands.push(hand);
-        }
-
-        // Stock: trump card at bottom (public), rest unknown
-        let stock_size = config.deck_size - config.num_players * 6;
-        let mut stock = Vec::with_capacity(stock_size);
-        stock.push(trump_card.as_public());
-        for _ in 1..stock_size {
-            stock.push(Card::Unknown);
-        }
-
-        let attacker = PlayerId::from_index(starting_player as usize);
-        let defender = attacker.next(config.num_players);
-
-        // Build attackers list (all players except defender)
-        let mut attackers = Vec::with_capacity(config.num_players - 1);
-        let mut pid = attacker;
-        for _ in 0..config.num_players {
-            if pid != defender {
-                attackers.push(pid);
+            if !seen.insert(id) {
+                return invalid_input(format!("{id:?} appears twice in your hand"));
             }
-            pid = pid.next(config.num_players);
         }
 
-        Ok(Self {
+        let attacker = seat(starting_player as usize, n, "the starting player")?;
+
+        let mut hands: Vec<Vec<Card>> = Vec::with_capacity(n);
+        hands.push(player_hand.iter().map(Card::as_private).collect());
+        for _ in 1..n {
+            hands.push(vec![Card::Unknown; HAND_SIZE]);
+        }
+
+        let mut declared: HashSet<usize> = HashSet::new();
+        for (pid, rank) in &opponent_trumps {
+            let idx = pid.index();
+            if idx == 0 || idx >= n {
+                return invalid_input(format!("{pid:?} is not an opponent in this game"));
+            }
+            if !declared.insert(idx) {
+                return invalid_input(format!("{pid:?} has more than one shown trump"));
+            }
+            let Some(rank) = rank else { continue };
+            let id = (trump, *rank);
+            if !deck.contains(&id) {
+                return invalid_input(format!(
+                    "{id:?} is not part of a {}-card deck",
+                    config.deck_size
+                ));
+            }
+            if !seen.insert(id) {
+                return invalid_input(format!(
+                    "{id:?} cannot be an opponent's trump: it is already accounted for"
+                ));
+            }
+            hands[idx][0] = Card::public(id.0, id.1);
+        }
+
+        let stock_size = config.deck_size - n * HAND_SIZE;
+        let mut stock = vec![Card::Unknown; stock_size];
+        stock[0] = trump_card.as_public();
+
+        let defender = attacker.next(n);
+        let state = Self {
             trump,
             attacker,
             defender,
             phase: Phase::Attacking,
-            attackers,
+            attackers: initial_attackers(attacker, defender, n),
             current_attacker_idx: 0,
             last_played_attacker: attacker,
             throw_start_idx: 0,
@@ -530,50 +606,214 @@ impl GameState {
             discard: vec![],
             reflected_trumps: vec![],
             config,
-        })
+        };
+        state.validate()?;
+        Ok(state)
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Validation
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Check every structural invariant. States built by this crate always
+    /// pass; this exists for states that arrive from outside (saved games).
+    pub fn validate(&self) -> Result<(), EngineError> {
+        self.config.validate()?;
+        let n = self.config.num_players;
+
+        if self.hands.len() != n {
+            return invalid_state(format!(
+                "expected {n} hands, found {}",
+                self.hands.len()
+            ));
+        }
+        for (name, pid) in [
+            ("attacker", self.attacker),
+            ("defender", self.defender),
+            ("last attacker", self.last_played_attacker),
+        ] {
+            if pid.index() >= n {
+                return invalid_state(format!("{name} {pid:?} is not a player in this game"));
+            }
+        }
+        if let Some(pid) = self.attackers.iter().find(|p| p.index() >= n) {
+            return invalid_state(format!("attacker {pid:?} is not a player in this game"));
+        }
+
+        // Card accounting: every card of the deck exactly once.
+        let deck = deck_ids(self.config.deck_size)?;
+        let mut seen: HashSet<CardId> = HashSet::new();
+        let mut total = 0usize;
+        let mut account = |card: &Card, place: &str, must_be_known: bool| -> Result<(), EngineError> {
+            total += 1;
+            match card.id() {
+                None if must_be_known => invalid_state(format!("unknown card {place}")),
+                None => Ok(()),
+                Some(id) if !deck.contains(&id) => invalid_state(format!(
+                    "{id:?} {place} is not part of a {}-card deck",
+                    self.config.deck_size
+                )),
+                Some(id) if !seen.insert(id) => {
+                    invalid_state(format!("{id:?} appears more than once ({place})"))
+                }
+                Some(_) => Ok(()),
+            }
+        };
+        for hand in &self.hands {
+            for card in hand {
+                account(card, "in a hand", false)?;
+            }
+        }
+        for card in &self.stock {
+            account(card, "in the stock", false)?;
+        }
+        for pile in &self.table {
+            account(&pile.attack, "on the table", true)?;
+            if let Some(d) = &pile.defense {
+                account(d, "on the table", true)?;
+            }
+        }
+        for card in &self.discard {
+            account(card, "in the discard pile", true)?;
+        }
+        if total != self.config.deck_size {
+            return invalid_state(format!(
+                "{total} cards in play, but the deck has {}",
+                self.config.deck_size
+            ));
+        }
+
+        if let Some(bottom) = self.stock.first() {
+            match bottom.id() {
+                Some((suit, _)) if suit == self.trump => {}
+                _ => return invalid_state("the bottom stock card must be the known trump card"),
+            }
+        }
+        if self.table.len() > MAX_PILES {
+            return invalid_state(format!("more than {MAX_PILES} piles on the table"));
+        }
+        for card in &self.reflected_trumps {
+            match card.id() {
+                Some((suit, _)) if suit == self.trump => {}
+                _ => return invalid_state("a shown trump is not a known trump card"),
+            }
+        }
+        for pile in &self.table {
+            if let Some(d) = &pile.defense {
+                if !d.beats(&pile.attack, self.trump) {
+                    return invalid_state("a defended pile holds a card that does not beat the attack");
+                }
+            }
+        }
+
+        if self.is_terminal() {
+            return Ok(());
+        }
+
+        // Turn structure only matters while the game is running.
+        if self.attacker == self.defender {
+            return invalid_state("attacker and defender are the same player");
+        }
+        if self.attackers.is_empty() || self.attackers[0] != self.attacker {
+            return invalid_state("the attackers list must start with the main attacker");
+        }
+        let unique: HashSet<PlayerId> = self.attackers.iter().copied().collect();
+        if unique.len() != self.attackers.len() || unique.contains(&self.defender) {
+            return invalid_state("the attackers list is inconsistent");
+        }
+        if self.current_attacker_idx >= self.attackers.len()
+            || self.throw_start_idx >= self.attackers.len()
+        {
+            return invalid_state("attacker index out of range");
+        }
+
+        let open = self.undefended_pile_count();
+        match self.phase {
+            Phase::Attacking if open > 0 => {
+                return invalid_state("attacking phase with an undefended pile")
+            }
+            Phase::Defending if open == 0 => {
+                return invalid_state("defending phase without an undefended pile")
+            }
+            Phase::Throwing if self.table.is_empty() => {
+                return invalid_state("throwing phase with an empty table")
+            }
+            _ => {}
+        }
+        if open > self.hand_size(self.defender) {
+            return invalid_state("more undefended cards than the defender can answer");
+        }
+        if self.table.is_empty()
+            && (self.hand_size(self.attacker) == 0 || self.hand_size(self.defender) == 0)
+        {
+            return invalid_state("a new trick needs an attacker and a defender with cards");
+        }
+        Ok(())
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Queries
+    // ─────────────────────────────────────────────────────────────────────
+
     pub fn hand_size(&self, pid: PlayerId) -> usize {
-        self.hands[pid as usize].len()
+        self.hands.get(pid.index()).map_or(0, Vec::len)
     }
 
     pub fn num_players(&self) -> usize {
         self.hands.len()
     }
 
-    /// Returns the durak (loser) if game is terminal.
-    pub fn durak(&self) -> Option<PlayerId> {
-        if !self.is_terminal() {
-            return None;
-        }
-
-        let mut durak = None;
-        for i in 0..self.num_players() {
-            let pid = PlayerId::from_index(i);
-            if self.hand_size(pid) > 0 {
-                if durak.is_some() {
-                    return None; // Multiple players with cards = tie
-                }
-                durak = Some(pid);
-            }
-        }
-        durak
+    /// A player is in the game while they hold cards or can still draw.
+    pub fn is_player_active(&self, pid: PlayerId) -> bool {
+        self.hand_size(pid) > 0 || !self.stock.is_empty()
     }
 
+    fn players_with_cards(&self) -> Vec<PlayerId> {
+        (0..self.num_players())
+            .map(PlayerId::from_index)
+            .filter(|p| self.hand_size(*p) > 0)
+            .collect()
+    }
+
+    /// The game is over when the stock is empty and nobody can still get out.
+    ///
+    /// One subtle case: when a single player holds cards but is the defender
+    /// of an unanswered attack, the game is *not* over yet - beating that
+    /// attack with their last card makes the game a draw.
     pub fn is_terminal(&self) -> bool {
         if !self.stock.is_empty() {
             return false;
         }
-        let players_with_cards = (0..self.num_players())
-            .filter(|&i| self.hand_size(PlayerId::from_index(i)) > 0)
-            .count();
-        players_with_cards <= 1
+        let holders = self.players_with_cards();
+        match holders.as_slice() {
+            [] => true,
+            [last] => !(*last == self.defender && self.phase == Phase::Defending),
+            _ => false,
+        }
+    }
+
+    pub fn outcome(&self) -> Outcome {
+        if !self.is_terminal() {
+            return Outcome::InProgress;
+        }
+        match self.players_with_cards().as_slice() {
+            [player] => Outcome::Durak { player: *player },
+            _ => Outcome::Draw,
+        }
+    }
+
+    /// The loser, if the game has ended with one. `None` both while the game
+    /// is running and after a draw - use [`GameState::outcome`] to tell them apart.
+    pub fn durak(&self) -> Option<PlayerId> {
+        match self.outcome() {
+            Outcome::Durak { player } => Some(player),
+            _ => None,
+        }
     }
 
     pub fn actor_to_move(&self) -> PlayerId {
         match self.phase {
             Phase::Attacking | Phase::Throwing => {
-                // Current attacker from the attackers list
                 if self.attackers.is_empty() {
                     self.attacker
                 } else {
@@ -582,6 +822,11 @@ impl GameState {
             }
             Phase::Defending => self.defender,
         }
+    }
+
+    /// True if no card anywhere is `Unknown`.
+    pub fn is_fully_known(&self) -> bool {
+        self.hands.iter().flatten().chain(self.stock.iter()).all(|c| !c.is_unknown())
     }
 
     fn ranks_on_table(&self) -> HashSet<Rank> {
@@ -599,278 +844,130 @@ impl GameState {
         self.table.iter().position(|p| p.defense.is_none())
     }
 
-    /// Count undefended piles on the table.
     fn undefended_pile_count(&self) -> usize {
         self.table.iter().filter(|p| p.defense.is_none()).count()
     }
 
-    /// Check if more cards can be thrown/attacked (defender has capacity).
-    fn defender_has_capacity(&self) -> bool {
-        self.undefended_pile_count() < self.hand_size(self.defender)
+    /// Room for one more attack card: under the pile limit and within what the
+    /// defender could still answer.
+    fn can_add_pile(&self) -> bool {
+        self.table.len() < MAX_PILES
+            && self.undefended_pile_count() < self.hand_size(self.defender)
     }
 
-    /// Find who would become the new defender if current defender reflects.
-    /// Returns None if there's no active player to become defender.
-    fn potential_reflect_defender(&self) -> Option<PlayerId> {
-        // The new defender is the next active player from the attackers list
-        if self.attackers.len() > 1 {
-            let candidate = self.attackers[1];
-            if self.is_player_active(candidate) {
-                return Some(candidate);
+    fn next_active_player(&self, from: PlayerId) -> PlayerId {
+        let n = self.num_players();
+        let mut pid = from.next(n);
+        for _ in 0..n {
+            if pid != from && self.is_player_active(pid) {
+                return pid;
             }
+            pid = pid.next(n);
         }
-        // Fallback: find any active player that's not the current defender
-        let num_players = self.num_players();
-        let mut pid = self.defender.next(num_players);
-        for _ in 0..num_players {
-            if pid != self.defender && self.is_player_active(pid) {
-                return Some(pid);
-            }
-            pid = pid.next(num_players);
-        }
-        None
+        from
     }
 
-    /// Create a determinized copy of this state from a player's perspective.
-    /// Uses the player's known information (Public + their Private cards).
-    /// Unknown cards are shuffled and reassigned randomly.
-    pub fn determinize(&self, perspective: PlayerId, rng: &mut impl Rng) -> Self {
-        let mut state = self.clone();
+    /// Who would have to defend if the current defender reflected: the next
+    /// active player in seat order. With two players this is the attacker.
+    fn reflect_target(&self) -> Option<PlayerId> {
+        let target = self.next_active_player(self.defender);
+        (target != self.defender).then_some(target)
+    }
 
-        // Collect all known cards (visible to perspective)
-        let mut known_cards: HashSet<(Suit, Rank)> = HashSet::new();
-
-        for (hand_idx, hand) in self.hands.iter().enumerate() {
-            for card in hand {
-                // Card is known if Public, or Private in perspective's hand
-                if card.is_public() || (card.is_private() && hand_idx == perspective as usize) {
-                    known_cards.insert((card.suit(), card.rank()));
-                }
-            }
-        }
-
-        for card in &self.stock {
-            if card.is_public() {
-                known_cards.insert((card.suit(), card.rank()));
-            }
-        }
-
-        for card in &self.discard {
-            known_cards.insert((card.suit(), card.rank()));
-        }
-
+    /// Every card id visible to somebody: table, discard, known hand cards and
+    /// the trump card.
+    fn known_ids(&self) -> HashSet<CardId> {
+        let mut known = HashSet::new();
         for pile in &self.table {
-            known_cards.insert((pile.attack.suit(), pile.attack.rank()));
-            if let Some(d) = pile.defense {
-                known_cards.insert((d.suit(), d.rank()));
-            }
+            known.extend(pile.attack.id());
+            known.extend(pile.defense.as_ref().and_then(Card::id));
         }
-
-        // Build pool of unknown cards (full deck minus known)
-        let deck = full_deck(self.config.deck_size);
-        let mut unknown_pool: Vec<Card> = deck
-            .into_iter()
-            .filter(|c| !known_cards.contains(&(c.suit(), c.rank())))
-            .map(|c| c.as_public())
-            .collect();
-
-        // Shuffle the unknown pool
-        for i in (1..unknown_pool.len()).rev() {
-            let j = rng.gen_range(0..=i);
-            unknown_pool.swap(i, j);
-        }
-
-        // Collect positions that need cards from the pool
-        let mut unknown_positions: Vec<(usize, usize)> = Vec::new();
-        let mut unknown_stock_positions: Vec<usize> = Vec::new();
-
-        for (hand_idx, hand) in state.hands.iter().enumerate() {
-            for (card_idx, card) in hand.iter().enumerate() {
-                let is_unknown = card.is_unknown() ||
-                    (card.is_private() && hand_idx != perspective as usize);
-                if is_unknown {
-                    unknown_positions.push((hand_idx, card_idx));
-                }
-            }
-        }
-
-        for (stock_idx, card) in state.stock.iter().enumerate() {
-            if card.is_unknown() || card.is_private() {
-                unknown_stock_positions.push(stock_idx);
-            }
-        }
-
-        // Reassign cards from the shuffled pool
-        let mut pool_idx = 0;
-        for (hand_idx, card_idx) in unknown_positions {
-            if pool_idx < unknown_pool.len() {
-                state.hands[hand_idx][card_idx] = unknown_pool[pool_idx];
-                pool_idx += 1;
-            }
-        }
-
-        for stock_idx in unknown_stock_positions {
-            if pool_idx < unknown_pool.len() {
-                state.stock[stock_idx] = unknown_pool[pool_idx];
-                pool_idx += 1;
-            }
-        }
-
-        // Make perspective's Private cards Public
-        for card in &mut state.hands[perspective as usize] {
-            if card.is_private() {
-                *card = card.as_public();
-            }
-        }
-
-        state
+        known.extend(self.discard.iter().filter_map(Card::id));
+        known.extend(self.hands.iter().flatten().filter_map(Card::id));
+        known.extend(self.stock.iter().filter_map(Card::id));
+        known
     }
 
-    /// Get cards a player can use for actions.
-    /// If hand contains Unknown cards, returns all unseen cards (any card that could be there).
-    /// Otherwise, returns the known cards (Public/Private).
+    /// Cards a player could play. A hand with unknown cards could hold any
+    /// card that is not accounted for elsewhere.
     fn usable_cards(&self, pid: PlayerId) -> Vec<Card> {
-        let hand = &self.hands[pid as usize];
-
-        if !hand.iter().any(|c| c.is_unknown()) {
-            // No unknown cards - return known cards
-            return hand.clone()
+        let hand = &self.hands[pid.index()];
+        let mut usable: Vec<Card> = hand.iter().filter(|c| !c.is_unknown()).copied().collect();
+        if usable.len() == hand.len() {
+            return usable;
         }
-
-        // Hand contains Unknown cards - return all unseen cards
-        let mut known_cards: HashSet<(Suit, Rank)> = HashSet::new();
-
-        // Cards on the table are known
-        for pile in &self.table {
-            known_cards.insert((pile.attack.suit(), pile.attack.rank()));
-            if let Some(d) = pile.defense {
-                known_cards.insert((d.suit(), d.rank()));
-            }
+        let known = self.known_ids();
+        if let Ok(deck) = full_deck(self.config.deck_size) {
+            usable.extend(
+                deck.into_iter()
+                    .filter(|c| c.id().is_some_and(|id| !known.contains(&id)))
+                    .map(|c| c.as_public()),
+            );
         }
-
-        // Cards in discard are known
-        for card in &self.discard {
-            known_cards.insert((card.suit(), card.rank()));
-        }
-
-        // Public cards in all hands are known
-        for hand in &self.hands {
-            for card in hand {
-                if card.is_public() || card.is_private() {
-                    known_cards.insert((card.suit(), card.rank()));
-                }
-            }
-        }
-
-        // Public cards in stock are known (trump card)
-        for card in &self.stock {
-            if card.is_public() {
-                known_cards.insert((card.suit(), card.rank()));
-            }
-        }
-
-        // Start with the player's own known cards (Public/Private in their hand)
-        let mut usable: Vec<Card> = hand.iter()
-            .filter(|c| c.is_public() || c.is_private())
-            .cloned()
-            .collect();
-
-        // Add all unseen cards (cards not known to be elsewhere)
-        usable.extend(
-            full_deck(self.config.deck_size)
-                .into_iter()
-                .filter(|c| !known_cards.contains(&(c.suit(), c.rank())))
-                .map(|c| c.as_public())
-        );
-
         usable
     }
 
+    fn can_reflect(&self, card: &Card, attack: &Card) -> bool {
+        self.config.reflecting
+            && card.rank() == attack.rank()
+            && self.table.iter().all(|p| p.defense.is_none())
+            && self.table.len() < MAX_PILES
+            && self
+                .reflect_target()
+                .is_some_and(|t| self.hand_size(t) >= self.table.len() + 1)
+    }
+
+    fn can_reflect_trump(&self, card: &Card, attack: &Card) -> bool {
+        self.config.trump_reflecting
+            && card.suit() == self.trump
+            && card.rank() == attack.rank()
+            && self.table.iter().all(|p| p.defense.is_none())
+            && !self.reflected_trumps.iter().any(|r| r.matches(card))
+            && self
+                .reflect_target()
+                .is_some_and(|t| self.hand_size(t) >= self.table.len())
+    }
+
+    /// Every action the player to move may take. Empty only when the game is over.
     pub fn legal_actions(&self) -> Vec<Action> {
         if self.is_terminal() {
             return vec![];
         }
-
-        let current_attacker = self.actor_to_move();
+        let actor = self.actor_to_move();
 
         match self.phase {
             Phase::Attacking => {
-                let mut acts = Vec::new();
-                let usable = self.usable_cards(current_attacker);
-
+                let usable = self.usable_cards(actor);
                 if self.table.is_empty() {
-                    // First attack - can play any card
-                    for c in usable {
-                        acts.push(Action::Attack { card: c });
-                    }
-                } else {
-                    // Continuing attack - can pass if all piles defended
-                    if self.open_pile_index().is_none() {
-                        acts.push(Action::PassAttack);
-                    }
-
-                    // Can attack with cards matching ranks on table (if defender has capacity)
+                    return usable.into_iter().map(|card| Action::Attack { card }).collect();
+                }
+                let mut acts = vec![Action::PassAttack];
+                if self.can_add_pile() {
                     let ranks = self.ranks_on_table();
-                    if self.defender_has_capacity() {
-                        for c in usable {
-                            if ranks.contains(&c.rank()) {
-                                acts.push(Action::Attack { card: c });
-                            }
-                        }
-                    }
+                    acts.extend(
+                        usable
+                            .into_iter()
+                            .filter(|c| ranks.contains(&c.rank()))
+                            .map(|card| Action::Attack { card }),
+                    );
                 }
                 acts
             }
             Phase::Defending => {
                 let Some(pile_index) = self.open_pile_index() else {
-                    return vec![Action::PassAttack];
+                    return vec![];
                 };
-
                 let attack = self.table[pile_index].attack;
-                let usable = self.usable_cards(self.defender);
-
                 let mut acts = Vec::new();
-
-                // Check if reflecting is possible:
-                // - All piles must be undefended
-                // - There must be an active player to become the new defender
-                // For regular reflect: new defender needs cards for existing piles + the new reflected card pile
-                // For trump reflect: new defender only needs cards for existing piles (no new pile created)
-                let can_reflect_regular = if self.table.iter().all(|p| p.defense.is_none()) {
-                    if let Some(new_defender) = self.potential_reflect_defender() {
-                        self.hand_size(new_defender) >= self.undefended_pile_count() + 1
-                    } else {
-                        false
+                for card in self.usable_cards(self.defender) {
+                    if card.beats(&attack, self.trump) {
+                        acts.push(Action::Defend { pile_index, card });
                     }
-                } else {
-                    false
-                };
-
-                let can_reflect_trump = if self.table.iter().all(|p| p.defense.is_none()) {
-                    if let Some(new_defender) = self.potential_reflect_defender() {
-                        self.hand_size(new_defender) >= self.undefended_pile_count()
-                    } else {
-                        false
+                    if self.can_reflect(&card, &attack) {
+                        acts.push(Action::Reflect { card });
                     }
-                } else {
-                    false
-                };
-
-                for c in usable {
-                    if c.beats(&attack, self.trump) {
-                        acts.push(Action::Defend { pile_index, card: c });
-                    }
-
-                    if can_reflect_regular && self.config.reflecting && c.rank() == attack.rank() {
-                        acts.push(Action::Reflect { card: c });
-                    }
-
-                    if can_reflect_trump && self.config.trump_reflecting
-                        && c.rank() == attack.rank()
-                        && c.suit() == self.trump
-                        && !self.reflected_trumps.iter().any(|r| r.matches(&c))
-                    {
-                        acts.push(Action::ReflectTrump { card: c });
+                    if self.can_reflect_trump(&card, &attack) {
+                        acts.push(Action::ReflectTrump { card });
                     }
                 }
                 acts.push(Action::Take);
@@ -878,491 +975,411 @@ impl GameState {
             }
             Phase::Throwing => {
                 let mut acts = vec![Action::Throw { card: None }];
-
-                let ranks = self.ranks_on_table();
-                let usable = self.usable_cards(current_attacker);
-
-                // Can only throw if defender has capacity (undefended piles < defender's hand)
-                if self.defender_has_capacity() {
-                    for c in usable {
-                        if ranks.contains(&c.rank()) {
-                            acts.push(Action::Throw { card: Some(c) });
-                        }
-                    }
+                if self.can_add_pile() {
+                    let ranks = self.ranks_on_table();
+                    acts.extend(
+                        self.usable_cards(actor)
+                            .into_iter()
+                            .filter(|c| ranks.contains(&c.rank()))
+                            .map(|card| Action::Throw { card: Some(card) }),
+                    );
                 }
-
                 acts
             }
         }
     }
 
+    pub fn is_legal(&self, action: &Action) -> bool {
+        self.legal_actions().iter().any(|a| a.same_move(action))
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Transitions
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Apply an action. Accepts exactly the actions [`GameState::legal_actions`]
+    /// lists; anything else is rejected and the state is left unchanged.
     pub fn apply(&mut self, action: &Action) -> Result<(), EngineError> {
-        let current_attacker = self.actor_to_move();
+        if self.is_terminal() {
+            return illegal("the game is over");
+        }
+        if !self.is_legal(action) {
+            return illegal(format!(
+                "{action:?} is not allowed for {:?} right now",
+                self.actor_to_move()
+            ));
+        }
+        let mut next = self.clone();
+        next.execute(action)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Perform an action without the legality check. Only for actions taken
+    /// straight from `legal_actions()` of this state (the search does this to
+    /// avoid generating the move list twice per step). On error the state may
+    /// be partially updated and must be discarded.
+    pub(crate) fn execute(&mut self, action: &Action) -> Result<(), EngineError> {
+        let actor = self.actor_to_move();
 
         match (self.phase, action) {
             (Phase::Attacking, Action::Attack { card }) => {
                 let card = *card;
-                if self.hand_size(self.defender) == 0 {
-                    return Err(EngineError::IllegalMove("too many piles".into()));
-                }
-                if !self.table.is_empty() {
-                    let ranks = self.ranks_on_table();
-                    if !ranks.contains(&card.rank()) {
-                        return Err(EngineError::IllegalMove("attack rank not on table".into()));
-                    }
-                }
-
-                self.remove_from_hand(current_attacker, &card)?;
-                // Card becomes public when played
+                self.remove_from_hand(actor, &card)?;
                 self.table.push(Pile { attack: card.as_public(), defense: None });
-                // Track who last played an attack card
-                self.last_played_attacker = current_attacker;
+                self.last_played_attacker = actor;
                 self.phase = Phase::Defending;
                 Ok(())
             }
             (Phase::Attacking, Action::PassAttack) => {
-                if self.open_pile_index().is_some() {
-                    return Err(EngineError::IllegalMove(
-                        "cannot pass while there are undefended piles".into(),
-                    ));
+                if self.table.is_empty() || self.open_pile_index().is_some() {
+                    return illegal("cannot pass now");
                 }
-
-                // Move to next attacker
                 if !self.attackers.is_empty() {
-                    self.current_attacker_idx = (self.current_attacker_idx + 1) % self.attackers.len();
-                    let next_attacker = self.attackers[self.current_attacker_idx];
-
-                    // If we've cycled back to the last player who attacked, everyone has passed
-                    if next_attacker != self.last_played_attacker {
-                        // More attackers can still play, stay in attacking phase
+                    self.current_attacker_idx =
+                        (self.current_attacker_idx + 1) % self.attackers.len();
+                    // Not back at the player who attacked last: someone else may still add cards.
+                    if self.attackers[self.current_attacker_idx] != self.last_played_attacker {
                         return Ok(());
                     }
                 }
 
-                // All attackers have passed - successful defense
-                // Discard the table (cards stay public in discard)
+                // Everyone passed: the defence succeeded.
                 for p in self.table.drain(..) {
                     self.discard.push(p.attack);
-                    if let Some(d) = p.defense {
-                        self.discard.push(d);
-                    }
+                    self.discard.extend(p.defense);
                 }
-
-                // Refill hands in draw order (attackers first, then defender)
                 self.refill_hands();
-
-                // Start new trick with defender as main attacker
                 self.new_trick(self.defender);
                 Ok(())
             }
             (Phase::Defending, Action::Defend { pile_index, card }) => {
-                let pile_index = *pile_index;
-                let card = *card;
-                if pile_index >= self.table.len() {
-                    return Err(EngineError::IllegalMove("bad pile index".into()));
+                let (pile_index, card) = (*pile_index, *card);
+                match self.table.get(pile_index) {
+                    Some(p) if p.defense.is_none() && card.beats(&p.attack, self.trump) => {}
+                    _ => return illegal("that card cannot defend that pile"),
                 }
-                if self.table[pile_index].defense.is_some() {
-                    return Err(EngineError::IllegalMove("pile already defended".into()));
-                }
-                let attack = self.table[pile_index].attack;
-                if !card.beats(&attack, self.trump) {
-                    return Err(EngineError::IllegalMove(
-                        "defense card does not beat attack".into(),
-                    ));
-                }
-
                 self.remove_from_hand(self.defender, &card)?;
                 self.table[pile_index].defense = Some(card.as_public());
-
                 if self.open_pile_index().is_none() {
                     self.phase = Phase::Attacking;
                 }
-
                 Ok(())
             }
             (Phase::Defending, Action::Take) => {
-                // Remember which attacker starts the throwing phase
                 self.throw_start_idx = self.current_attacker_idx;
                 self.phase = Phase::Throwing;
                 Ok(())
             }
             (Phase::Defending, Action::Reflect { card }) => {
                 let card = *card;
-                if !self.config.reflecting {
-                    return Err(EngineError::IllegalMove("reflecting not enabled".into()));
-                }
-                if self.table.iter().any(|p| p.defense.is_some()) {
-                    return Err(EngineError::IllegalMove(
-                        "cannot reflect after defending a pile".into(),
-                    ));
-                }
-                let Some(pile_index) = self.open_pile_index() else {
-                    return Err(EngineError::IllegalMove("no open pile to reflect".into()));
+                let Some(new_defender) = self.reflect_target() else {
+                    return illegal("nobody to pass the attack to");
                 };
-                let attack = self.table[pile_index].attack;
-                if card.rank() != attack.rank() {
-                    return Err(EngineError::IllegalMove(
-                        "reflect card must have same rank as attack".into(),
-                    ));
-                }
-
-                // Find new defender - must be an active player
-                let Some(new_defender) = self.potential_reflect_defender() else {
-                    return Err(EngineError::IllegalMove(
-                        "no active player to become defender".into(),
-                    ));
-                };
-
-                // Check if new defender has enough cards to defend all piles (including the reflected card)
-                if self.hand_size(new_defender) < self.undefended_pile_count() + 1 {
-                    return Err(EngineError::IllegalMove(
-                        "new defender does not have enough cards to defend all piles".into(),
-                    ));
-                }
-
                 self.remove_from_hand(self.defender, &card)?;
                 self.table.push(Pile { attack: card.as_public(), defense: None });
-
-                // The defender who reflected becomes the new attacker
-                let old_defender = self.defender;
-                self.attacker = old_defender;
-                self.defender = new_defender;
-
-                // Rebuild attackers list
-                self.attackers = self.build_attackers(self.attacker);
-                self.current_attacker_idx = 0;
-                self.last_played_attacker = self.attacker;
-
-                self.phase = Phase::Defending;
+                self.redirect_attack(new_defender);
                 Ok(())
             }
             (Phase::Defending, Action::ReflectTrump { card }) => {
                 let card = *card;
-                if !self.config.trump_reflecting {
-                    return Err(EngineError::IllegalMove("trump reflecting not enabled".into()));
-                }
-                if self.table.iter().any(|p| p.defense.is_some()) {
-                    return Err(EngineError::IllegalMove(
-                        "cannot reflect after defending a pile".into(),
-                    ));
-                }
-                let Some(pile_index) = self.open_pile_index() else {
-                    return Err(EngineError::IllegalMove("no open pile to reflect".into()));
+                let Some(new_defender) = self.reflect_target() else {
+                    return illegal("nobody to pass the attack to");
                 };
-                let attack = self.table[pile_index].attack;
-                if card.rank() != attack.rank() {
-                    return Err(EngineError::IllegalMove(
-                        "reflect card must have same rank as attack".into(),
-                    ));
+                // The card stays in hand but is now known to everyone.
+                let hand = &mut self.hands[self.defender.index()];
+                let slot = hand
+                    .iter()
+                    .position(|c| c.matches(&card))
+                    .or_else(|| hand.iter().position(Card::is_unknown));
+                match slot {
+                    Some(i) => hand[i] = card.as_public(),
+                    None => return illegal("that trump is not in the defender's hand"),
                 }
-                if card.suit() != self.trump {
-                    return Err(EngineError::IllegalMove(
-                        "trump reflect requires a trump card".into(),
-                    ));
-                }
-                if self.reflected_trumps.iter().any(|r| r.matches(&card)) {
-                    return Err(EngineError::IllegalMove(
-                        "this trump has already been used for reflecting this turn".into(),
-                    ));
-                }
-
-                // Find new defender - must be an active player
-                let Some(new_defender) = self.potential_reflect_defender() else {
-                    return Err(EngineError::IllegalMove(
-                        "no active player to become defender".into(),
-                    ));
-                };
-
-                // Check if new defender has enough cards to defend all piles
-                // Trump reflecting doesn't create a new pile, so only existing piles need to be defended
-                if self.hand_size(new_defender) < self.undefended_pile_count() {
-                    return Err(EngineError::IllegalMove(
-                        "new defender does not have enough cards to defend all piles".into(),
-                    ));
-                }
-
-                // Card stays in hand but becomes public, marked as used
                 self.reflected_trumps.push(card.as_public());
-
-                // Make the card public in hand
-                if let Some(c) = self.hands[self.defender as usize].iter_mut()
-                    .find(|c| c.matches(&card))
-                {
-                    *c = c.as_public();
-                }
-
-                // The defender who reflected becomes the new attacker
-                let old_defender = self.defender;
-                self.attacker = old_defender;
-                self.defender = new_defender;
-
-                // Rebuild attackers list
-                self.attackers = self.build_attackers(self.attacker);
-                self.current_attacker_idx = 0;
-                self.last_played_attacker = self.attacker;
-
-                self.phase = Phase::Defending;
+                self.redirect_attack(new_defender);
                 Ok(())
             }
-            (Phase::Throwing, Action::Throw { card }) => {
-                if let Some(c) = card {
-                    let ranks = self.ranks_on_table();
-                    if !ranks.contains(&c.rank()) {
-                        return Err(EngineError::IllegalMove("thrown rank not on table".into()));
-                    }
-                    if self.hand_size(self.defender) == 0 {
-                        return Err(EngineError::IllegalMove("defender has no capacity".into()));
-                    }
-                    self.remove_from_hand(current_attacker, c)?;
-                    self.table.push(Pile { attack: c.as_public(), defense: None });
-                    return Ok(());
-                }
-
-                // None = done throwing for this attacker, move to next
+            (Phase::Throwing, Action::Throw { card: Some(card) }) => {
+                let card = *card;
+                self.remove_from_hand(actor, &card)?;
+                self.table.push(Pile { attack: card.as_public(), defense: None });
+                Ok(())
+            }
+            (Phase::Throwing, Action::Throw { card: None }) => {
                 if !self.attackers.is_empty() {
-                    self.current_attacker_idx = (self.current_attacker_idx + 1) % self.attackers.len();
-
-                    // If we haven't cycled back to start, more attackers can throw
+                    self.current_attacker_idx =
+                        (self.current_attacker_idx + 1) % self.attackers.len();
                     if self.current_attacker_idx != self.throw_start_idx {
                         return Ok(());
                     }
                 }
 
-                // All attackers done throwing - defender takes everything
-                let taken: Vec<Card> = self.table.drain(..)
-                    .flat_map(|p| {
-                        let mut cards = vec![p.attack];
-                        if let Some(d) = p.defense {
-                            cards.push(d);
-                        }
-                        cards
-                    })
+                // Everyone is done throwing: the defender picks up the table.
+                let taken: Vec<Card> = self
+                    .table
+                    .drain(..)
+                    .flat_map(|p| std::iter::once(p.attack).chain(p.defense))
                     .collect();
-
-                // Cards taken are public (they were on the table)
-                self.hands[self.defender as usize].extend(taken);
-
-                // Refill hands in draw order (attackers first, then defender)
+                let defender = self.defender;
+                self.hands[defender.index()].extend(taken);
                 self.refill_hands();
-
-                // Start new trick - main attacker is player after the defender
-                let num_players = self.num_players();
-                let new_main_attacker = self.defender.next(num_players);
-                self.new_trick(new_main_attacker);
+                // The defender loses their turn to attack.
+                self.new_trick(defender.next(self.num_players()));
                 Ok(())
             }
-            (_, a) => Err(EngineError::IllegalMove(format!(
-                "action not allowed in this phase: {a:?}"
-            ))),
+            (_, a) => illegal(format!("{a:?} is not allowed in the {:?} phase", self.phase)),
         }
     }
 
-    /// Remove a card from a player's hand (matching by suit and rank).
-    /// If the card isn't found but the hand has Unknown cards, removes one Unknown
-    /// (the opponent "reveals" that their unknown card was this specific card).
+    /// The reflecting defender becomes the main attacker; `new_defender` must answer.
+    fn redirect_attack(&mut self, new_defender: PlayerId) {
+        self.attacker = self.defender;
+        self.defender = new_defender;
+        self.attackers = self.build_attackers(self.attacker);
+        self.current_attacker_idx = 0;
+        self.last_played_attacker = self.attacker;
+        self.phase = Phase::Defending;
+    }
+
+    /// Active players other than the defender, starting from `main_attacker`.
+    fn build_attackers(&self, main_attacker: PlayerId) -> Vec<PlayerId> {
+        let n = self.num_players();
+        let mut attackers = Vec::with_capacity(n.saturating_sub(1));
+        let mut pid = main_attacker;
+        for _ in 0..n {
+            if pid != self.defender && (pid == main_attacker || self.is_player_active(pid)) {
+                attackers.push(pid);
+            }
+            pid = pid.next(n);
+        }
+        attackers
+    }
+
+    fn new_trick(&mut self, main_attacker: PlayerId) {
+        let main_attacker = if self.is_player_active(main_attacker) {
+            main_attacker
+        } else {
+            self.next_active_player(main_attacker)
+        };
+        self.attacker = main_attacker;
+        self.defender = self.next_active_player(main_attacker);
+        self.attackers = self.build_attackers(main_attacker);
+        self.current_attacker_idx = 0;
+        self.last_played_attacker = main_attacker;
+        self.throw_start_idx = 0;
+        self.phase = Phase::Attacking;
+        self.reflected_trumps.clear();
+        self.table.clear();
+    }
+
+    /// Remove a card from a hand. If the hand does not show the card but has
+    /// unknown cards, one of those turns out to have been it.
     fn remove_from_hand(&mut self, pid: PlayerId, card: &Card) -> Result<(), EngineError> {
-        let hand = &mut self.hands[pid as usize];
-        // First try exact match
-        if let Some(i) = hand.iter().position(|c| c.matches(card)) {
-            hand.swap_remove(i);
-            return Ok(());
+        let hand = &mut self.hands[pid.index()];
+        let slot = hand
+            .iter()
+            .position(|c| c.matches(card))
+            .or_else(|| hand.iter().position(Card::is_unknown));
+        match slot {
+            Some(i) => {
+                hand.swap_remove(i);
+                Ok(())
+            }
+            None => illegal(format!("{pid:?} does not hold that card")),
         }
-        // If not found, try removing an Unknown card (manual mode: opponent plays a card we didn't know they had)
-        if let Some(i) = hand.iter().position(|c| c.is_unknown()) {
-            hand.swap_remove(i);
-            return Ok(());
-        }
-        Err(EngineError::IllegalMove(format!("card not in {pid:?}'s hand")))
     }
 
-    /// Refill hands after a round ends by drawing from stock.
-    /// Draw order: attackers first (in order), then defender.
+    /// Draw back up to six cards: attackers in order, the defender last.
     fn refill_hands(&mut self) {
-        // Build draw order: attackers first, then defender
-        let mut draw_order: Vec<PlayerId> = self.attackers.clone();
-        draw_order.push(self.defender);
+        let mut order = self.attackers.clone();
+        order.push(self.defender);
+        for pid in order {
+            while self.hand_size(pid) < HAND_SIZE {
+                let Some(card) = self.stock.pop() else { return };
+                // The face-up trump stays public; everything else is private to the drawer.
+                let card = if card.is_public() || card.is_unknown() { card } else { card.as_private() };
+                self.hands[pid.index()].push(card);
+            }
+        }
+    }
 
-        for pid in draw_order {
-            while self.hand_size(pid) < 6 && !self.stock.is_empty() {
-                if let Some(card) = self.stock.pop() {
-                    // Drawn cards remain private (or become private if they were in stock)
-                    // Exception: trump card (first in stock) is already public
-                    // Exception: Unknown cards stay unknown (manual mode)
-                    let card = if card.is_public() || card.is_unknown() {
-                        card
-                    } else {
-                        card.as_private()
-                    };
-                    self.hands[pid as usize].push(card);
+    // ─────────────────────────────────────────────────────────────────────
+    // Hidden information
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Tell the engine what an unknown card in `pid`'s hand turned out to be
+    /// (used when the observer draws from the stock in a real game).
+    pub fn reveal_card(&mut self, pid: PlayerId, card: Card) -> Result<(), EngineError> {
+        if pid.index() >= self.num_players() {
+            return invalid_input(format!("{pid:?} is not a player in this game"));
+        }
+        let Some(id) = card.id() else {
+            return invalid_input("cannot reveal an unknown card");
+        };
+        if !deck_ids(self.config.deck_size)?.contains(&id) {
+            return invalid_input(format!(
+                "{id:?} is not part of a {}-card deck",
+                self.config.deck_size
+            ));
+        }
+        if self.known_ids().contains(&id) {
+            return invalid_input(format!("{id:?} is already accounted for"));
+        }
+        let hand = &mut self.hands[pid.index()];
+        match hand.iter().position(Card::is_unknown) {
+            Some(i) => {
+                hand[i] = card.as_private();
+                Ok(())
+            }
+            None => invalid_input(format!("{pid:?} has no unknown cards")),
+        }
+    }
+
+    /// Card ids `perspective` can see: public cards plus their own hand.
+    fn visible_ids(&self, perspective: PlayerId) -> HashSet<CardId> {
+        let mut known = HashSet::new();
+        for (idx, hand) in self.hands.iter().enumerate() {
+            for card in hand {
+                if card.is_public() || (card.is_private() && idx == perspective.index()) {
+                    known.extend(card.id());
                 }
             }
         }
+        known.extend(self.stock.iter().filter(|c| c.is_public()).filter_map(Card::id));
+        known.extend(self.discard.iter().filter_map(Card::id));
+        for pile in &self.table {
+            known.extend(pile.attack.id());
+            known.extend(pile.defense.as_ref().and_then(Card::id));
+        }
+        known
     }
-}
 
-pub fn full_deck(size: usize) -> Vec<Card> {
-    let suits = [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades];
-    let ranks = match size {
-        32 => vec![Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace],
-        36 => vec![Rank::Six, Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace],
-        40 => vec![Rank::Five, Rank::Six, Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace],
-        44 => vec![Rank::Four, Rank::Five, Rank::Six, Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace],
-        48 => vec![Rank::Three, Rank::Four, Rank::Five, Rank::Six, Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace],
-        52 => vec![Rank::Two, Rank::Three, Rank::Four, Rank::Five, Rank::Six, Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace],
-        _ => vec![Rank::Six, Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace], // default to 36
-    };
-
-    let mut out = Vec::with_capacity(size);
-    for s in suits {
-        for r in &ranks {
-            out.push(Card::private(s, *r));
-        }
-    }
-    out
-}
-
-/// Result of rollout-based evaluation for a single action.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RolloutActionResult {
-    /// The action evaluated.
-    pub action: Action,
-    /// Number of visits (rollouts) for this action.
-    pub visits: u32,
-    /// Score: wins / visits. Range [0, 1].
-    pub score: f32,
-}
-
-// ============================================================================
-// UCT-MCTS Tree Search (non-recursive, compact)
-// ============================================================================
-
-/// Maximum number of seats (see `PlayerId`).
-const MAX_PLAYERS: usize = 6;
-
-/// MCTS tree node: per-player wins + visits stats, children keyed by action.
-///
-/// Wins are tracked for EVERY player, not just the one being advised. At each
-/// node the player to move picks the child that is best for themselves
-/// (max^n). Storing only the perspective player's wins and maximising them at
-/// every node would model opponents as helping the perspective player, which
-/// makes lost endgames evaluate as near-certain wins.
-#[derive(Debug, Clone, Default)]
-struct MCTSNode {
-    wins: [u32; MAX_PLAYERS],
-    visits: u32,
-    children: HashMap<Action, MCTSNode>,
-    unexplored: Vec<Action>,
-}
-
-impl MCTSNode {
-    /// UCT selection from the point of view of `actor`, the player to move at
-    /// this node: w_actor/n + C * sqrt(ln(N)/n)
-    fn uct_select(&self, c: f64, actor: usize) -> Option<&Action> {
-        let ln_n = (self.visits as f64).ln();
-        self.children.iter()
-            .max_by(|(_, a), (_, b)| {
-                let score = |node: &MCTSNode| {
-                    if node.visits == 0 { f64::INFINITY }
-                    else { node.wins[actor] as f64 / node.visits as f64 + c * (ln_n / node.visits as f64).sqrt() }
-                };
-                score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(action, _)| action)
-    }
-}
-
-/// Result of UCT-MCTS evaluation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MCTSEvalAll {
-    pub actions: Vec<RolloutActionResult>,
-    pub total_rollouts: u32,
-}
-
-/// UCT-MCTS tree search. Builds tree adaptively, focusing on promising moves.
-/// The state should be determinized before calling this function.
-pub fn mcts_evaluate_actions(
-    state: &GameState,
-    seed: u64,
-    perspective: PlayerId,
-    rollouts: u32,
-    max_depth: u32,
-    c: f64,
-) -> MCTSEvalAll {
-    let mut rng = StdRng::seed_from_u64(seed);
-    let mut root = MCTSNode { unexplored: state.legal_actions(), ..Default::default() };
-
-    for _ in 0..rollouts {
-        let mut path = vec![];
-        let mut node = &mut root;
-        let mut s = state.clone();
-
-        // Selection: descend tree using UCT until we find unexplored action or terminal
-        while node.unexplored.is_empty() && !node.children.is_empty() && !s.is_terminal() {
-            let actor = s.actor_to_move() as usize;
-            let action = node.uct_select(c, actor).unwrap().clone();
-            let _ = s.apply(&action);
-            node = node.children.get_mut(&action).unwrap();
-            path.push(action);
-        }
-
-        // Expansion: if unexplored actions exist, expand one
-        if let Some(action) = node.unexplored.pop() {
-            let _ = s.apply(&action);
-            path.push(action.clone());
-            node.children.insert(action, MCTSNode { unexplored: s.legal_actions(), ..Default::default() });
-        }
-
-        // Simulation: random playout to terminal
-        let mut depth = 0u32;
-        while !s.is_terminal() && depth < max_depth {
-            let acts = s.legal_actions();
-            if acts.is_empty() { break; }
-            let idx = rng.gen_range(0..acts.len());
-            let _ = s.apply(&acts[idx]);
-            depth += 1;
-        }
-        // A player "wins" a finished game by not being the durak. A playout
-        // cut off by max_depth counts as a win for nobody.
-        let mut won = [false; MAX_PLAYERS];
-        if let Some(d) = s.durak() {
-            for (i, w) in won.iter_mut().enumerate() {
-                *w = i != d as usize;
+    /// Positions (hand, index) and stock indices whose card `perspective` cannot see.
+    fn hidden_slots(&self, perspective: PlayerId) -> (Vec<(usize, usize)>, Vec<usize>) {
+        let mut hand_slots = Vec::new();
+        for (h, hand) in self.hands.iter().enumerate() {
+            for (i, card) in hand.iter().enumerate() {
+                if card.is_unknown() || (card.is_private() && h != perspective.index()) {
+                    hand_slots.push((h, i));
+                }
             }
         }
-
-        // Backpropagation: update stats along path
-        root.visits += 1;
-        for i in 0..MAX_PLAYERS { if won[i] { root.wins[i] += 1; } }
-        let mut node = &mut root;
-        for action in &path {
-            node = node.children.get_mut(action).unwrap();
-            node.visits += 1;
-            for i in 0..MAX_PLAYERS { if won[i] { node.wins[i] += 1; } }
-        }
+        let stock_slots = self
+            .stock
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.is_public())
+            .map(|(i, _)| i)
+            .collect();
+        (hand_slots, stock_slots)
     }
 
-    // Extract and sort results
-    let p = perspective as usize;
-    let mut results: Vec<_> = root.children.iter().map(|(action, n)| {
-        let score = if n.visits > 0 {
-            n.wins[p] as f32 / n.visits as f32
-        } else {
-            0.0
-        };
-        RolloutActionResult {
-            action: action.clone(),
-            visits: n.visits,
-            score,
-        }
-    }).collect();
-    results.sort_by(|a, b| b.visits.cmp(&a.visits)
-        .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)));
+    /// The cards `perspective` cannot see, in a fixed order.
+    fn hidden_pool(&self, perspective: PlayerId) -> Result<Vec<Card>, EngineError> {
+        let visible = self.visible_ids(perspective);
+        Ok(full_deck(self.config.deck_size)?
+            .into_iter()
+            .filter(|c| c.id().is_some_and(|id| !visible.contains(&id)))
+            .map(|c| c.as_public())
+            .collect())
+    }
 
-    MCTSEvalAll { actions: results, total_rollouts: rollouts }
+    /// Sample one concrete world consistent with what `perspective` knows:
+    /// every card they can see stays put, every hidden card is dealt at random.
+    /// The result has no unknown cards. Fails if the state is inconsistent or
+    /// if `perspective` does not know their own hand.
+    pub fn determinize(
+        &self,
+        perspective: PlayerId,
+        rng: &mut impl Rng,
+    ) -> Result<Self, EngineError> {
+        if perspective.index() >= self.num_players() {
+            return invalid_input(format!("{perspective:?} is not a player in this game"));
+        }
+        if self.hands[perspective.index()].iter().any(Card::is_unknown) {
+            return invalid_state(format!(
+                "{perspective:?} has cards that have not been identified yet"
+            ));
+        }
+
+        let mut pool = self.hidden_pool(perspective)?;
+        let (hand_slots, stock_slots) = self.hidden_slots(perspective);
+        if pool.len() != hand_slots.len() + stock_slots.len() {
+            return invalid_state(format!(
+                "{} hidden cards but {} cards unaccounted for",
+                hand_slots.len() + stock_slots.len(),
+                pool.len()
+            ));
+        }
+        for i in (1..pool.len()).rev() {
+            let j = rng.gen_range(0..=i);
+            pool.swap(i, j);
+        }
+
+        let mut state = self.clone();
+        let mut deal = pool.into_iter();
+        for (h, i) in hand_slots {
+            state.hands[h][i] = deal.next().expect("pool size checked");
+        }
+        for i in stock_slots {
+            state.stock[i] = deal.next().expect("pool size checked");
+        }
+        for card in state.hands.iter_mut().flatten() {
+            *card = card.as_public();
+        }
+        Ok(state)
+    }
+
+    /// True if `perspective` can work out every remaining card: the stock is
+    /// empty, they know their own hand, and at most one other player holds
+    /// cards they cannot see.
+    pub fn all_cards_deducible(&self, perspective: PlayerId) -> bool {
+        if !self.stock.is_empty() || perspective.index() >= self.num_players() {
+            return false;
+        }
+        if self.hands[perspective.index()].iter().any(Card::is_unknown) {
+            return false;
+        }
+        let hidden_hands = self
+            .hands
+            .iter()
+            .enumerate()
+            .filter(|(i, hand)| *i != perspective.index() && hand.iter().any(|c| !c.is_public()))
+            .count();
+        hidden_hands <= 1
+    }
+
+    /// Replace unknown cards with the cards they must be. Only valid when
+    /// [`GameState::all_cards_deducible`] holds.
+    pub fn deduce_cards(&self, perspective: PlayerId) -> Result<Self, EngineError> {
+        if !self.all_cards_deducible(perspective) {
+            return invalid_state("the remaining cards cannot be deduced yet");
+        }
+        let known = self.known_ids();
+        let mut remaining: Vec<Card> = full_deck(self.config.deck_size)?
+            .into_iter()
+            .filter(|c| c.id().is_some_and(|id| !known.contains(&id)))
+            .map(|c| c.as_public())
+            .collect();
+        let unknown_slots = self.hands.iter().flatten().filter(|c| c.is_unknown()).count();
+        if remaining.len() != unknown_slots {
+            return invalid_state(format!(
+                "{unknown_slots} unknown cards but {} cards unaccounted for",
+                remaining.len()
+            ));
+        }
+        let mut state = self.clone();
+        for card in state.hands.iter_mut().flatten() {
+            if card.is_unknown() {
+                *card = remaining.pop().expect("count checked");
+            }
+        }
+        Ok(state)
+    }
 }
 
-/// Pick a random legal action from the given state.
-/// Returns None if no legal actions are available (terminal state).
+/// Pick a uniformly random legal action; `None` when the game is over.
 pub fn pick_random_action(state: &GameState, seed: u64) -> Option<Action> {
     let actions = state.legal_actions();
     if actions.is_empty() {

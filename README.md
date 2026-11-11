@@ -2,68 +2,127 @@
 
 **English** · [Slovensky](README.sk.md)
 
-A browser-based helper for the card game Durak. Enter the cards and moves from a
-real game and it ranks your legal moves with Monte Carlo Tree Search, showing a
-win probability for each.
+A browser app for the card game [Durak](https://en.wikipedia.org/wiki/Durak), for
+**two or three players**. Play against computer opponents, or follow along with a
+game you are playing elsewhere and get move suggestions.
 
-## What's in here
+Everything runs in your browser: the game engine is Rust compiled to
+WebAssembly, and nothing is sent to a server.
 
-| Path | What it is |
-|---|---|
-| `durak-online/` | The solver and web UI, based on [jorisperrenet/durak-online](https://github.com/jorisperrenet/durak-online) (MIT), with the changes below. |
-| `.claude/launch.json` | Dev-server config for Claude Code's preview pane. |
+## What you can do
 
-## Changes to durak-online
+**Play the computer.** The app deals, and you play one or two computer
+opponents. Each opponent either searches for a good move (you choose how long
+it may think) or plays at random. Suggestions for your own moves can be turned
+on or off at any time.
 
-**MCTS endgame fix (`durak-core/src/lib.rs`).** The original search stored wins
-only from the advised player's point of view and maximised them at every node,
-including opponents' turns. That modelled opponents as playing to help you, so
-lost endgames evaluated as near-certain wins. Each node now tracks results for
-every player and whoever is to move picks what is best for themselves (max^n),
-which also handles 3+ player games correctly.
+**Analyse a real game.** Enter the trump card, your six cards and who attacks
+first, then record each move as it happens at the table. Whenever it is your
+turn the app ranks your legal moves. When you draw cards you tell the app which
+ones; once the stock is empty and only one opponent's cards are unknown, the
+app works them out for you.
 
-| Test position (`durak-core/tests/endgame.rs`) | Before | After |
-|---|---|---|
-| Forced loss | 99.5 % | 0.2 % |
-| Forced win | 100 % | 100 % |
+In both modes you can undo, games are saved in the browser and restored when
+you come back, and the app works on phones, tablets and desktops in light or
+dark theme.
 
-Expect win rates to look lower overall than before: the old numbers were inflated.
+## Rules implemented
 
-**Game setup (`web/src/App.svelte`).** The "opponent's lowest trump" step is
-removed, since opponents' trumps aren't revealed in the variant this is built
-for. Who starts is chosen manually.
+- 2 or 3 players; decks of 32, 36, 40, 44, 48 or 52 cards; six-card hands.
+- One attack card at a time; the defender answers before the next one.
+- At most six attack cards per trick, and never more unanswered cards than the
+  defender holds.
+- Throw-in: every attacker may add cards whose rank is already on the table.
+- After a trick, attackers draw first (the main attacker first), the defender
+  last. A defender who takes the cards misses their turn to attack.
+- In dealt games, whoever holds the lowest trump attacks first.
+- The game ends when the stock is empty and at most one player still holds
+  cards. That player is the durak. If the last defender beats the final attack
+  with their last card, nobody holds cards and the game is a **draw**.
+
+Two optional rules, chosen when you start a game:
+
+- **Reflecting** - before defending anything, the defender may play a card of
+  the same rank to pass the whole attack to the next player, provided that
+  player holds enough cards to answer it. With two players the attack goes back
+  to the original attacker.
+- **Reflecting by showing a trump** - the defender may instead show the trump of
+  that rank and keep it. Each trump can be shown once per trick.
+
+## About the suggestions
+
+Suggestions come from a Monte Carlo tree search. The cards you cannot see are
+dealt at random many times; each deal is searched and played out to the end.
+The percentage shown next to a move is its **score**: how often, across those
+simulated games, you did not end up as the durak (a draw counts as not losing;
+a simulation cut off before the end counts as half).
+
+Treat the score as a way to compare moves, not as an exact probability. It
+depends on random deals and largely random play-outs, it varies from run to
+run, and the search can be wrong. The number of simulations behind each score
+is shown so you can judge how settled it is, and "Search longer" adds more.
 
 ## Running it
 
-Requirements: [Rust](https://rustup.rs/) with the `wasm32-unknown-unknown`
-target, [wasm-pack](https://rustwasm.github.io/wasm-pack/), Node.js 18+.
+You need [Node.js](https://nodejs.org/) 18 or newer, [Rust](https://rustup.rs/),
+and [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/).
 
 ```bash
 rustup target add wasm32-unknown-unknown
 cargo install wasm-pack
 
-cd durak-online/durak-wasm
-wasm-pack build --target web
-mkdir -p ../web/src/wasm
-cp pkg/durak_wasm* ../web/src/wasm/
-
-cd ../web
+cd durak-online/web
 npm install
-npm run dev        # http://localhost:5173
+npm run dev
 ```
 
-Use **Analyse a real game** mode: pick the trump card, your six cards and who
-starts, then enter each move as it happens. Set the player count, deck size and
-**Reflecting** to match your table.
+Open <http://localhost:5173>. `npm run dev` builds the WebAssembly engine the
+first time; run `npm run wasm` to rebuild it after changing Rust code.
 
-Run the engine tests:
+| Command (in `durak-online/web`) | What it does |
+|---|---|
+| `npm run dev` | Start the development server |
+| `npm run build` | Rebuild the engine and produce a static site in `dist/` |
+| `npm run wasm` | Rebuild only the WebAssembly engine |
+| `npm test` | Run the browser-side tests |
+
+The engine has its own tests:
 
 ```bash
 cd durak-online
 cargo test -p durak-core --release
 ```
 
-## Credits
+The contents of `dist/` can be hosted on any static file host, from any path.
 
-Solver and original UI: [Joris Perrenet](https://github.com/jorisperrenet/durak-online),
-MIT licence (see `durak-online/LICENSE`).
+## Project layout
+
+```
+durak-online/
+├── durak-core/   Rust engine: rules, validation, search          (tests in tests/)
+├── durak-wasm/   WebAssembly bindings
+└── web/          Svelte app                                      (tests in tests/)
+```
+
+## How this version differs from the original
+
+This project is based on
+[durak-online](https://github.com/jorisperrenet/durak-online) by Joris Perrenet.
+Compared with it, this version:
+
+- supports two- and three-player tables only;
+- lets you choose who attacks first in a real game, instead of asking for each
+  opponent's lowest trump;
+- recognises drawn games and enforces the six-card limit per trick;
+- shows how many simulations are behind each suggestion;
+- has a redesigned interface with its own colour scheme, a phone layout and
+  keyboard and screen-reader support.
+
+## Credits and licence
+
+The game engine and the original web app are by
+[Joris Perrenet](https://github.com/jorisperrenet/durak-online) and are used
+under the MIT licence; see [`durak-online/LICENSE`](durak-online/LICENSE). The
+changes in this repository are released under the same licence.
+
+Card images come from the original project.

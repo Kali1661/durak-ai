@@ -1,189 +1,138 @@
-const SETTINGS_KEY = 'durak_game_settings'
-const SETTINGS_VERSION = 2
+// User settings: defaults, limits and sanitising.
+//
+// Everything read from localStorage goes through `sanitizeSettings`, so the
+// rest of the app can rely on every value being present and in range.
 
-/**
- * Player types for AI behavior configuration.
- */
+const SETTINGS_KEY = 'durak_game_settings'
+const SETTINGS_VERSION = 3
+
 export const PlayerType = {
   Human: 'Human',
   Random: 'Random',
   MCTS: 'MCTS',
-  Real: 'Real', // Real-life player (manual mode)
+  Real: 'Real', // a person at a real table (analyse mode)
 }
 
-export const DEFAULT_SETTINGS = {
+/** Opponent kinds offered when playing against the computer. */
+export const AI_TYPES = [
+  { value: PlayerType.MCTS, label: 'Search (MCTS)', hint: 'Thinks before each move' },
+  { value: PlayerType.Random, label: 'Random', hint: 'Plays any legal move' },
+]
+
+export const PLAYER_COUNTS = [2, 3]
+
+export const DECK_SIZES = [
+  { value: 32, label: '32 cards (7 to ace)' },
+  { value: 36, label: '36 cards (6 to ace)' },
+  { value: 40, label: '40 cards (5 to ace)' },
+  { value: 44, label: '44 cards (4 to ace)' },
+  { value: 48, label: '48 cards (3 to ace)' },
+  { value: 52, label: '52 cards (2 to ace)' },
+]
+
+/** Inclusive [min, max] for every numeric setting. */
+export const LIMITS = {
+  numThreads: [1, 16],
+  mctsThinkingTimeMs: [250, 30000],
+  mctsDeterminizations: [1, 200],
+  hintDeterminizations: [1, 500],
+  hintRollouts: [100, 50000],
+}
+
+export function maxThreads() {
+  const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4
+  return Math.max(1, Math.min(LIMITS.numThreads[1], cores))
+}
+
+export const DEFAULT_SETTINGS = Object.freeze({
   _version: SETTINGS_VERSION,
   deckSize: 36,
   numPlayers: 2,
-  trumpReflecting: true,
-  reflecting: true,
-  numThreads: Math.max(4, Math.min(8, Math.floor(((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 8) / 2))),
-  playerNames: {
-    P0: 'You',
-    P1: 'Player 1',
-    P2: 'Player 2',
-    P3: 'Player 3',
-    P4: 'Player 4',
-    P5: 'Player 5',
-  },
-  // Player types (indexed by player ID)
-  playerTypes: {
-    P0: PlayerType.Human,
-    P1: PlayerType.MCTS,
-    P2: PlayerType.MCTS,
-    P3: PlayerType.MCTS,
-    P4: PlayerType.MCTS,
-    P5: PlayerType.MCTS,
-  },
-  // Computer shuffle toggle: true = computer deals, false = manual input
+  trumpReflecting: false,
+  reflecting: false,
+  numThreads: Math.max(1, Math.min(8, Math.floor(maxThreads() / 2) || 1)),
+  playerNames: Object.freeze({ P1: 'Opponent 1', P2: 'Opponent 2' }),
+  playerTypes: Object.freeze({ P1: PlayerType.MCTS, P2: PlayerType.MCTS }),
+  // true = play against the computer, false = analyse a real game
   computerShuffle: false,
-  // MCTS thinking time in milliseconds (for MCTS players)
   mctsThinkingTimeMs: 2000,
-  // Number of MCTS determinizations per solve
-  mctsDeterminizations: 20,
-  // Show hints for human player (continuous MCTS)
+  mctsDeterminizations: 16,
   showHints: true,
-  // Hint solver settings (determinizations and rollouts per action)
-  hintDeterminizations: 50,
-  hintRollouts: 5000,
+  hintDeterminizations: 24,
+  hintRollouts: 2000,
+})
+
+/** Round to an integer inside [min, max]; fall back when not a number. */
+export function clampInt(value, [min, max], fallback) {
+  const n = typeof value === 'string' ? Number.parseInt(value, 10) : value
+  if (typeof n !== 'number' || !Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, Math.round(n)))
+}
+
+function cleanName(value, fallback) {
+  if (typeof value !== 'string') return fallback
+  const trimmed = value.replace(/\s+/g, ' ').trim().slice(0, 20)
+  return trimmed || fallback
 }
 
 /**
- * Validate settings and return any errors.
- * @param {typeof DEFAULT_SETTINGS} settings
- * @returns {{ valid: boolean, errors: string[] }}
+ * Turn anything (old saves, hand-edited storage, garbage) into valid settings.
+ * Unknown keys are dropped; out-of-range values are clamped; unsupported
+ * choices fall back to the default.
  */
-export function validateSettings(settings) {
-  const errors = []
+export function sanitizeSettings(raw) {
+  const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  const d = DEFAULT_SETTINGS
+  const bool = (v, fallback) => (typeof v === 'boolean' ? v : fallback)
+  const names = src.playerNames && typeof src.playerNames === 'object' ? src.playerNames : {}
+  const types = src.playerTypes && typeof src.playerTypes === 'object' ? src.playerTypes : {}
+  const aiType = (v, fallback) => (v === PlayerType.MCTS || v === PlayerType.Random ? v : fallback)
+  // Names from before version 3 were "Player 1"-style defaults; replace those.
+  const legacyName = v => (typeof v === 'string' && /^Player \d$/.test(v) ? undefined : v)
 
-  // Find human players (only among active players)
-  const humanPlayers = Object.entries(settings.playerTypes)
-    .filter(([pid]) => parseInt(pid.slice(1)) < settings.numPlayers)
-    .filter(([, type]) => type === PlayerType.Human)
-    .map(([pid]) => pid)
-
-  // Allow zero human players (computer plays itself)
-  // But if there is a human, it must be P0
-  if (humanPlayers.length > 1) {
-    errors.push('Only one human player is allowed (to prevent card peeking)')
-  } else if (humanPlayers.length === 1 && humanPlayers[0] !== 'P0') {
-    errors.push('Human player must be P0 (use your own device to play as a different player)')
+  return {
+    _version: SETTINGS_VERSION,
+    deckSize: DECK_SIZES.some(x => x.value === src.deckSize) ? src.deckSize : d.deckSize,
+    numPlayers: PLAYER_COUNTS.includes(src.numPlayers) ? src.numPlayers : d.numPlayers,
+    trumpReflecting: bool(src.trumpReflecting, d.trumpReflecting),
+    reflecting: bool(src.reflecting, d.reflecting),
+    numThreads: clampInt(src.numThreads, [1, maxThreads()], Math.min(d.numThreads, maxThreads())),
+    playerNames: {
+      P1: cleanName(legacyName(names.P1), d.playerNames.P1),
+      P2: cleanName(legacyName(names.P2), d.playerNames.P2),
+    },
+    playerTypes: {
+      P1: aiType(types.P1, d.playerTypes.P1),
+      P2: aiType(types.P2, d.playerTypes.P2),
+    },
+    computerShuffle: bool(src.computerShuffle, d.computerShuffle),
+    mctsThinkingTimeMs: clampInt(src.mctsThinkingTimeMs, LIMITS.mctsThinkingTimeMs, d.mctsThinkingTimeMs),
+    mctsDeterminizations: clampInt(src.mctsDeterminizations, LIMITS.mctsDeterminizations, d.mctsDeterminizations),
+    showHints: bool(src.showHints, d.showHints),
+    hintDeterminizations: clampInt(src.hintDeterminizations, LIMITS.hintDeterminizations, d.hintDeterminizations),
+    hintRollouts: clampInt(src.hintRollouts, LIMITS.hintRollouts, d.hintRollouts),
   }
-
-  return { valid: errors.length === 0, errors }
 }
 
-/**
- * Get the human player ID, or null if none.
- * @param {typeof DEFAULT_SETTINGS} settings
- * @returns {string | null}
- */
-export function getHumanPlayer(settings) {
-  for (let i = 0; i < settings.numPlayers; i++) {
-    const pid = `P${i}`
-    if (settings.playerTypes[pid] === PlayerType.Human) {
-      return pid
-    }
-  }
-  return null
-}
-
-/**
- * Load settings from localStorage
- * @returns {typeof DEFAULT_SETTINGS}
- */
 export function loadSettings() {
   try {
     const stored = localStorage.getItem(SETTINGS_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-
-      // Check version and migrate if needed
-      if (!parsed._version || parsed._version < SETTINGS_VERSION) {
-        return migrateSettings(parsed)
-      }
-
-      // Deep merge nested objects
-      const settings = {
-        ...DEFAULT_SETTINGS,
-        ...parsed,
-        playerNames: {
-          ...DEFAULT_SETTINGS.playerNames,
-          ...(parsed.playerNames || {}),
-        },
-        playerTypes: {
-          ...DEFAULT_SETTINGS.playerTypes,
-          ...(parsed.playerTypes || {}),
-        },
-      }
-
-      // Fix any human players in non-P0 slots (from old versions)
-      for (let i = 1; i < 6; i++) {
-        const pid = `P${i}`
-        if (settings.playerTypes[pid] === PlayerType.Human) {
-          settings.playerTypes[pid] = PlayerType.Random
-        }
-      }
-
-      return settings
-    }
+    return sanitizeSettings(stored ? JSON.parse(stored) : null)
   } catch (e) {
-    console.warn('Failed to load settings:', e)
+    console.warn('Could not read saved settings; using defaults.', e)
+    return sanitizeSettings(null)
   }
-  return { ...DEFAULT_SETTINGS }
 }
 
-/**
- * Migrate old settings to new format.
- * @param {object} old
- * @returns {typeof DEFAULT_SETTINGS}
- */
-function migrateSettings(old) {
-  const migrated = { ...DEFAULT_SETTINGS }
-
-  // Preserve existing settings that still exist
-  if (old.deckSize) migrated.deckSize = old.deckSize
-  if (old.numPlayers) migrated.numPlayers = old.numPlayers
-  if (old.trumpReflecting !== undefined) migrated.trumpReflecting = old.trumpReflecting
-  if (old.reflecting !== undefined) migrated.reflecting = old.reflecting
-  if (old.numThreads) migrated.numThreads = old.numThreads
-  if (old.playerNames) {
-    migrated.playerNames = { ...DEFAULT_SETTINGS.playerNames, ...old.playerNames }
-  }
-
-  console.log('Migrated settings from version', old._version || 1, 'to', SETTINGS_VERSION)
-  return migrated
-}
-
-/**
- * Save settings to localStorage
- * @param {typeof DEFAULT_SETTINGS} settings
- */
 export function saveSettings(settings) {
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, _version: SETTINGS_VERSION }))
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(sanitizeSettings(settings)))
   } catch (e) {
-    console.warn('Failed to save settings:', e)
+    console.warn('Could not save settings.', e)
   }
 }
 
-/**
- * Reset settings to defaults
- * @returns {typeof DEFAULT_SETTINGS}
- */
-export function resetSettings() {
-  try {
-    localStorage.removeItem(SETTINGS_KEY)
-  } catch (e) {
-    console.warn('Failed to reset settings:', e)
-  }
-  return { ...DEFAULT_SETTINGS }
-}
-
-/**
- * Convert settings to GameConfig format for WASM
- * @param {typeof DEFAULT_SETTINGS} settings
- */
+/** Engine config for a new game. */
 export function settingsToGameConfig(settings) {
   return {
     deck_size: settings.deckSize,
