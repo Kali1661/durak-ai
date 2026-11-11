@@ -112,19 +112,29 @@ durak-online/
 └── web/          aplikácia vo Svelte                                (testy v tests/)
 ```
 
-## Čím sa táto verzia líši od pôvodnej
+## Vzťah k pôvodnému projektu
 
-Projekt vychádza z
+Tento projekt vznikol z
 [durak-online](https://github.com/jorisperrenet/durak-online), ktorého autorom
-je Joris Perrenet. Oproti nemu táto verzia:
+je Joris Perrenet, a zachováva jeho celkový návrh: model hry, vyhľadávanie
+Monte Carlo s náhodným rozdaním skrytých kariet bežiace vo WebAssembly a
+obrázky kariet.
+
+Väčšina kódu bola odvtedy prepísaná a vylepšená. Engine bol prepracovaný tak,
+aby overoval každý vstup aj uloženú hru, kontroloval svoje pravidlá
+automatickými testami a hodnotil pozície pre každého hráča zvlášť.
+Vyhľadávanie, webová aplikácia aj rozhranie boli vytvorené nanovo.
+
+Oproti pôvodnej verzii táto verzia:
 
 - podporuje iba stoly pre dvoch a troch hráčov;
-- v skutočnej hre umožňuje zvoliť, kto útočí ako prvý, namiesto zadávania
-  najnižšieho tromfu každého súpera;
+- v skutočnej hre umožňuje zvoliť, kto útočí ako prvý;
 - rozpoznáva remízy a dodržiava limit šiestich kariet na kolo;
 - pri každom odporúčaní ukazuje, koľko simulácií za ním stojí;
-- má prepracované rozhranie s vlastnou farebnou schémou, rozložením pre telefón
-  a podporou klávesnice a čítačiek obrazovky.
+- má nové rozhranie s rozložením pre telefón a podporou klávesnice a čítačiek
+  obrazovky.
+
+Prípadné chyby v tejto verzii idú na jej vrub, nie na vrub pôvodného autora.
 
 ## Poďakovanie a licencia
 

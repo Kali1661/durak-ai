@@ -104,19 +104,27 @@ durak-online/
 └── web/          Svelte app                                      (tests in tests/)
 ```
 
-## How this version differs from the original
+## Relationship to the original
 
-This project is based on
-[durak-online](https://github.com/jorisperrenet/durak-online) by Joris Perrenet.
-Compared with it, this version:
+This project started from
+[durak-online](https://github.com/jorisperrenet/durak-online) by Joris Perrenet
+and keeps its overall design: the game model, the determinized Monte Carlo
+search running in WebAssembly workers, and the card artwork.
+
+Most of the code has since been rewritten and improved. The engine was reworked
+to validate every input and saved game, to check its own rules with an
+automated test suite, and to score positions for each player separately. The
+search, the browser app and the interface were rebuilt from scratch.
+
+Compared with the original, this version:
 
 - supports two- and three-player tables only;
-- lets you choose who attacks first in a real game, instead of asking for each
-  opponent's lowest trump;
+- lets you choose who attacks first in a real game;
 - recognises drawn games and enforces the six-card limit per trick;
 - shows how many simulations are behind each suggestion;
-- has a redesigned interface with its own colour scheme, a phone layout and
-  keyboard and screen-reader support.
+- has a new interface with a phone layout and keyboard and screen-reader support.
+
+Any mistakes in this version are its own, not the original author's.
 
 ## Credits and licence
 
