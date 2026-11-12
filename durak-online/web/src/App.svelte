@@ -79,6 +79,8 @@
    * from being made again right after it was taken back.
    */
   let assumedAt = -1
+  /** Who the assumption was about: me (I stopped adding) or an opponent. */
+  let assumedBy = null
   let holdAdding = false
   /** Real-game setup: trump card, my six cards, who attacks first. */
   let setup = { trump: null, hand: [], starter: ME }
@@ -381,6 +383,18 @@
     if (!gs || outcome.status !== 'in_progress') return
     const who = actorOf(gs)
 
+    // An attacker who may add more cards before the answer: assume they add
+    // none, so play goes on at once. A side button takes it back ("add another
+    // card" for me, "they added more cards" for a real opponent). Computer
+    // opponents decide for themselves.
+    if (gs.phase === 'Adding' && !holdAdding && (who === ME || !isPlay())) {
+      if (perform({ type: 'let_defend' }, { snapshot: true, suffix: who === ME ? '' : ' (assumed)' })) {
+        assumedAt = epoch
+        assumedBy = who
+      }
+      return
+    }
+
     if (who === ME) {
       if (unknownCount(handOf(gs, ME)) > 0) return
       if (isPlay() && legal.length === 1) {
@@ -393,14 +407,7 @@
       return
     }
 
-    if (!isPlay()) {
-      // A real opponent who may still add cards: assume they added none, so
-      // the suggestions can start; "They added more cards" takes it back.
-      if (gs.phase === 'Adding' && !holdAdding) {
-        if (perform({ type: 'let_defend' }, { snapshot: true, suffix: ' (assumed)' })) assumedAt = epoch
-      }
-      return // otherwise wait for their move to be entered
-    }
+    if (!isPlay()) return // a real opponent: wait for their move to be entered
     if (settings.playerTypes[who] === PlayerType.Random) {
       schedule(playRandomMove, 600)
     } else {
@@ -1039,11 +1046,10 @@
               {/each}
             </div>
 
-            {#if !playMode && assumedAt === epoch && history.length}
-              <div class="notice notice-info" role="status">
-                <span aria-hidden="true">ℹ</span>
-                <p class="m-0 flex-1">Assumed {nameOf(gs.last_played_attacker)} added no more cards.</p>
-                <button type="button" class="btn btn-sm" on:click={addedMoreCards}>＋ They added more cards</button>
+            {#if assumedAt === epoch && history.length}
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <span class="text-xs text-muted">{assumedBy === ME ? 'Want to lay down another card first?' : `Assumed ${nameOf(gs.last_played_attacker)} added no more cards.`}</span>
+                <button type="button" class="btn btn-sm" on:click={addedMoreCards}>{assumedBy === ME ? '＋ Add another card' : '＋ They added more cards'}</button>
               </div>
             {/if}
 
