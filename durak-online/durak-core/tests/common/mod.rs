@@ -1,6 +1,8 @@
 //! Shared helpers for building hand-made positions.
 #![allow(dead_code, unused_imports)]
 
+pub mod recorded;
+
 use durak_core::*;
 
 pub use durak_core::PlayerId::{P0, P1, P2};

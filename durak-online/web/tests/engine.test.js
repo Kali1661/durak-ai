@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { addResult, createTally, pickBest, summarize } from '../src/lib/aggregate.js'
+import { addResult, createTally, pickBest, summarize, withExact } from '../src/lib/aggregate.js'
 import { actorOf } from '../src/lib/game.js'
 
 const wasm = await import('../src/wasm/durak_wasm.js')
@@ -202,4 +202,34 @@ test('classic ending: the defender who beats the last card with their last card 
   const draw = lastCards(false)
   const beatDraw = wasm.legal_actions(draw).find(a => a.type === 'defend')
   assert.equal(wasm.game_outcome(wasm.apply_action(draw, beatDraw)).status, 'draw')
+})
+
+test('exact solver: an endgame with every card known is calculated, a fresh game is not', () => {
+  const fresh = newGame(3, { deck_size: 24 })
+  assert.equal(wasm.is_exactly_solvable(fresh), false)
+  assert.equal(wasm.solve_exact({ state: fresh }) ?? null, null)
+
+  // Play on (the same way every run) until the stock is gone and few cards are left.
+  let state = newGame(7, { deck_size: 24, reflecting: true, classic_ending: true })
+  for (let i = 0; i < 3000; i++) {
+    if (wasm.game_outcome(state).status !== 'in_progress') break
+    const cards = state.hands[0].length + state.hands[1].length
+    if (wasm.is_exactly_solvable(state) && cards <= 9) break
+    const moves = wasm.legal_actions(state)
+    state = wasm.apply_action(state, moves[(i * 7 + 3) % moves.length])
+  }
+  assert.equal(wasm.game_outcome(state).status, 'in_progress', 'the test game ended before an endgame was reached')
+  assert.equal(wasm.is_exactly_solvable(state), true)
+
+  const exact = wasm.solve_exact({ state, max_nodes: 2_000_000 })
+  const legal = wasm.legal_actions(state)
+  assert.equal(exact.perspective, actorOf(state))
+  assert.equal(exact.actions.length, legal.length)
+  for (const a of exact.actions) assert.ok(['win', 'draw', 'loss'].includes(a.value), `unsettled move: ${JSON.stringify(a)}`)
+  assert.ok(['win', 'draw', 'loss'].includes(exact.value))
+
+  // The app's choice follows the calculation, whatever the estimates say.
+  const { summary } = chooseMove(state)
+  const best = pickBest(withExact(summary, exact))
+  assert.equal(best.exact, exact.value)
 })

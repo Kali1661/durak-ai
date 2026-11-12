@@ -19,7 +19,8 @@
     isOut, isPublic, isUnknown, knownCards, parseCard, promptFor, ranksFor, roleOf, seatIndex,
     sortCards, unknownCount,
   } from './lib/game.js'
-  import { actionKey, addResult, createTally, pickBest, summarize } from './lib/aggregate.js'
+  import { actionKey, addResult, createTally, pickBest, summarize, withExact } from './lib/aggregate.js'
+  import { ExactSolver, exactNodeBudget } from './lib/exact-solver.js'
   import { SolverPool, friendlySolverError } from './lib/solver-pool.js'
   import { addStep, finalize, hintSnapshot, isRecording, newRecording, saveReplay, truncate } from './lib/replays.js'
   import initWasm, * as engine from './wasm/durak_wasm.js'
@@ -64,6 +65,10 @@
   let hint = idleHint()
   let hintTally = null
   let ai = idleAi()
+  /** The exact endgame solver's answer for the position of `epoch` (see lib/exact-solver.js). */
+  const idleExact = () => ({ epoch: -1, status: 'idle', result: null })
+  let exact = idleExact()
+  let exactSolver = null
 
   let revealOpponents = false
   /** Real-game setup: trump card, my six cards, who attacks first. */
@@ -91,8 +96,11 @@
   $: myCards = gs ? sortCards(handOf(gs, ME).map(parseCard).filter(Boolean), gs.trump) : []
   $: myUnknown = gs ? unknownCount(handOf(gs, ME)) : 0
   $: trumpCard = gs?.stock?.length ? parseCard(gs.stock[0]) : null
-  $: stats = new Map((hint.summary?.actions || []).map(a => [a.key, a]))
-  $: bestKey = (hint.summary && pickBest(hint.summary)?.key) || null
+  // What is shown: the search's estimates, with calculated results on top where there are any.
+  $: exactNow = exact.epoch === epoch ? exact : idleExact()
+  $: shown = withExact(hint.summary || (exactNow.result ? summarize(null, legal) : null), exactNow.result)
+  $: stats = new Map((shown?.actions || []).map(a => [a.key, a]))
+  $: bestKey = (shown && pickBest(shown)?.key) || null
   $: actionsByCard = groupByCard(legal)
   $: nonCardActions = legal.filter(a => !actionCard(a))
   $: setupDeck = deckCards(settings.deckSize, setup.trump?.suit)
@@ -262,6 +270,8 @@
     epoch++
     hintRun++
     pool?.cancel()
+    exactSolver?.cancel()
+    exact = idleExact()
     if (pendingTimer !== null) clearTimeout(pendingTimer)
     pendingTimer = null
     hint = idleHint()
@@ -328,6 +338,9 @@
     }
   }
 
+  /** The advice on screen right now: estimates plus any calculated results. */
+  const adviceNow = () => withExact(hint.summary, exact.epoch === epoch ? exact.result : null)
+
   /** Apply a move for whoever is to move. Returns false (and explains) if the engine refuses it. */
   function perform(action, { snapshot = false, suffix = '' } = {}) {
     if (!gs) return false
@@ -343,7 +356,7 @@
     const actor = actorOf(gs)
     // For my own moves, remember what the search was saying when I chose.
     const advice = actor === ME && settings.showHints
-      ? hintSnapshot(hint.summary, pickBest(hint.summary)?.key, actionKey(action), actionText)
+      ? hintSnapshot(adviceNow(), pickBest(adviceNow())?.key, actionKey(action), actionText)
       : null
     commit(next, { snapshot, line: actionLogText(action, who) + suffix, step: { actor, action, hint: advice } })
     return true
@@ -396,6 +409,32 @@
     pool.resize(settings.numThreads)
   }
 
+  /**
+   * Ask the exact endgame solver about `state`, if it applies (two players, no
+   * hidden cards left). Resolves with its result or null; never rejects.
+   */
+  function solveExactly(state, thinkingMs) {
+    try {
+      if (!engine.is_exactly_solvable(state)) return Promise.resolve(null)
+      exactSolver ??= new ExactSolver(() => new Worker(new URL('./workers/solver.worker.js', import.meta.url), { type: 'module' }))
+    } catch (e) {
+      console.warn('The exact solver is unavailable.', e)
+      return Promise.resolve(null)
+    }
+    return exactSolver.solve(state, exactNodeBudget(thinkingMs))
+  }
+
+  /** Start the exact calculation for my move, alongside the search. */
+  function startExact() {
+    const at = epoch
+    const pending = solveExactly(gs, settings.hintThinkingMs)
+    exact = { epoch: at, status: 'running', result: null }
+    pending.then(result => {
+      if (at !== epoch) return
+      exact = { epoch: at, status: result ? 'done' : 'idle', result }
+    })
+  }
+
   /** Fold one batch into a tally. Returns a message if anything went wrong. */
   function absorb(tally, res) {
     let problem = null
@@ -420,6 +459,7 @@
     const moves = legal
     if (!more || !hintTally) hintTally = createTally()
     const tally = hintTally
+    if (exact.epoch !== at) startExact()
     const stale = () => at !== epoch || run !== hintRun
 
     try {
@@ -487,6 +527,8 @@
     const tally = createTally()
     const limit = settings.mctsThinkingTimeMs
     const startedAt = performance.now()
+    // With no hidden cards left the result can be calculated, not just estimated.
+    const exactly = solveExactly(state, limit)
     let rollouts = 1000
     let problem = null
 
@@ -505,7 +547,9 @@
       if (res.elapsedMs < remaining / 3) rollouts = Math.min(20000, rollouts * 2)
     }
 
-    const best = pickBest(summarize(tally, moves))
+    const calculated = await exactly
+    if (at !== epoch) return
+    const best = pickBest(withExact(summarize(tally, moves), calculated))
     if (!best) {
       // Never substitute a random move silently: say what happened and let the player decide.
       ai = { status: 'failed', player, message: problem || 'The search did not evaluate any move.' }
@@ -724,6 +768,7 @@
     schedule(advance, 0)
   })
 
+  onDestroy(() => exactSolver?.terminate())
   onDestroy(() => {
     if (pendingTimer !== null) clearTimeout(pendingTimer)
     epoch++
@@ -1047,14 +1092,25 @@
                     {:else if hint.status === 'error'}Suggestions are unavailable for this move.
                     {:else}Waiting to search.{/if}
                   </p>
+                  {#if exactNow.status === 'running'}
+                    <p class="mt-1 flex items-center gap-2 text-xs text-muted" role="status"><span class="spinner" aria-hidden="true"></span> All cards are known - calculating the exact result…</p>
+                  {:else if exactNow.result}
+                    <p class="mt-2 rounded-xl border px-3 py-2 text-sm font-semibold {exactNow.result.value === 'win' ? 'border-accent/60 bg-accent/10' : exactNow.result.value === 'loss' ? 'border-danger/60 bg-danger/10' : 'border-line bg-sunken'}" role="status">
+                      {#if exactNow.result.value === 'win'}Calculated: you win from here with best play.
+                      {:else if exactNow.result.value === 'loss'}Calculated: this position is lost against best play. The estimates show which move gives the opponent most chances to go wrong.
+                      {:else if exactNow.result.value === 'draw'}Calculated: a draw with best play - nobody can be forced to lose.
+                      {:else if exactNow.result.actions.some(a => a.value)}Calculated for some moves only - the position is too large to finish. The rest are estimates.
+                      {:else}Too large to calculate exactly yet - these are estimates.{/if}
+                    </p>
+                  {/if}
                   {#if hint.message}
                     <div class="notice notice-error mt-2" role="alert"><span aria-hidden="true">⚠</span><p class="m-0">{hint.message}</p></div>
                   {/if}
                 {/if}
 
                 <ul class="m-0 mt-3 list-none space-y-2 p-0">
-                  {#each (hint.summary?.actions.map(a => a.action) || legal) as a (actionKey(a))}
-                    <li><MoveRow action={a} stat={stats.get(actionKey(a))} best={actionKey(a) === bestKey} on:click={() => playMine(a)} /></li>
+                  {#each (shown?.actions.map(a => a.action) || legal) as a (actionKey(a))}
+                    <li><MoveRow action={a} stat={stats.get(actionKey(a))} exact={stats.get(actionKey(a))?.exact} best={actionKey(a) === bestKey} on:click={() => playMine(a)} /></li>
                   {/each}
                 </ul>
 
@@ -1067,6 +1123,7 @@
                   <details class="mt-3 text-xs text-muted">
                     <summary class="cursor-pointer font-semibold text-ink">What do the numbers mean?</summary>
                     <p class="mb-0 mt-2">The percentage is a <strong>score</strong>: across many simulated games from this position, how often you did not end up as the durak after that move. The hidden cards are dealt at random and the simulations play randomly past the first few moves, so treat it as a guide for comparing moves, not as an exact probability. The small number is how many simulations (playouts) back the score; "rough" marks scores built on few of them.</p>
+                    <p class="mb-0 mt-2"><strong>Wins / Draw / Loses (calculated)</strong> appears in two-player games once no cards are hidden - the stock is empty or down to the trump card. Then the app works the result out by checking every line of play, instead of estimating it: a move that "wins" wins against any defence. A draw means both players run out together, or neither can make progress without losing and the play would go round in circles. Positions with many cards can be too large to finish; the moves it could not settle keep their estimate.</p>
                     {#if hint.summary?.totalCutoffs}<p class="mb-0 mt-2">{hint.summary.totalCutoffs.toLocaleString('en')} playouts were cut off before the game ended and count as half.</p>{/if}
                   </details>
                 {/if}

@@ -93,8 +93,20 @@ Skóre ber ako spôsob porovnania ťahov, nie ako presnú pravdepodobnosť. Záv
 od náhodných rozdaní a z veľkej časti náhodného dohrávania, medzi behmi sa
 mení a vyhľadávanie sa môže mýliť. Pri každom skóre je uvedený počet simulácií,
 aby si vedel posúdiť, nakoľko je ustálené; tlačidlo „Search longer" ich pridá.
-Platí to aj na konci hry, keď sú všetky karty známe: skóre je tam stále odhad
-zo simulácií, nie presný výpočet.
+**Vypočítané výsledky.** V hre dvoch hráčov, keď už nie sú žiadne skryté karty -
+balíček je prázdny alebo v ňom zostal len tromf - aplikácia prestane odhadovať
+a výsledok vypočíta preverením všetkých možných pokračovaní. Ťahy sú potom
+označené *Wins* (vyhráva), *Draw* (remíza) alebo *Loses* (prehráva): ťah, ktorý
+vyhráva, vyhráva proti akejkoľvek obrane. Remíza znamená, že sa obaja hráči
+zbavia kariet naraz, alebo že nikto nevie postúpiť bez prehry (pri prekladaní
+sa hra môže točiť dokola). Odhad zostáva zobrazený vedľa - pomáha vybrať medzi
+ťahmi s rovnakým vypočítaným výsledkom; v prehratej pozícii je to ťah, ktorý
+dáva súperovi najviac príležitostí pomýliť sa.
+
+Pozície s veľa kartami môžu byť príliš veľké na dopočítanie v danom čase;
+aplikácia vtedy ukáže výsledok pri ťahoch, ktoré stihla rozhodnúť, a pri
+ostatných odhad. V hre troch hráčov a kým sú niektoré karty skryté je každé
+skóre odhad.
 
 ## Spustenie
 

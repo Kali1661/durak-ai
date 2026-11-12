@@ -24,7 +24,12 @@
 //! exactly: `apply` accepts an action if and only if `legal_actions` lists it,
 //! and a rejected action leaves the state untouched.
 
+mod endgame;
 mod mcts;
+
+#[doc(hidden)]
+pub use endgame::solve_exact_reference;
+pub use endgame::{is_exactly_solvable, solve_exact, ExactAction, ExactResult, ExactValue};
 
 pub use mcts::{
     mcts_evaluate_actions, solve, ActionEval, MctsEval, SolveParams, SolveResult,

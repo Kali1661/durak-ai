@@ -82,6 +82,34 @@ export function summarize(tally, legal) {
 }
 
 /**
+ * How good a calculated result is. A move the exact solver could not settle
+ * ranks below a certain draw and above a certain loss.
+ */
+const EXACT_RANK = { win: 3, draw: 2, loss: 0 }
+const exactRank = a => (a.exact ? EXACT_RANK[a.exact] ?? 1 : 1)
+
+/**
+ * Attach the exact endgame solver's results to a summary: every action gains
+ * `exact` ('win' | 'draw' | 'loss' | null) and the list is re-sorted so that
+ * calculated results come before estimates - wins first, losses last, the
+ * search score deciding within each group. `exact` is the engine's
+ * `solve_exact` result; with none, the summary is returned unchanged.
+ */
+export function withExact(summary, exact) {
+  if (!summary || !exact || !Array.isArray(exact.actions)) return summary
+  const values = new Map(exact.actions.map(a => [actionKey(a.action), a.value || null]))
+  const actions = summary.actions.map(a => ({ ...a, exact: values.get(a.key) ?? null }))
+  if (!actions.some(a => a.exact)) return summary
+  actions.sort((a, b) => {
+    if (exactRank(a) !== exactRank(b)) return exactRank(b) - exactRank(a)
+    if ((a.score === null) !== (b.score === null)) return a.score === null ? 1 : -1
+    if (a.score === null) return 0
+    return b.score - a.score || b.visits - a.visits
+  })
+  return { ...summary, actions, exactValue: exact.value || null, exactNodes: exact.nodes || 0 }
+}
+
+/**
  * The move to play: the highest score among sufficiently sampled actions.
  *
  * An action explored only a handful of times has a meaningless score, so
@@ -89,9 +117,20 @@ export function summarize(tally, legal) {
  * playouts are not candidates. Ties go to the action with more playouts.
  * Returns null when nothing has been evaluated - the caller must decide what
  * to do then; this function never guesses.
+ *
+ * When the exact solver has settled some moves (see `withExact`), only the
+ * moves with the best calculated result are candidates, and the search score
+ * just breaks ties among them: a certain win beats any estimate.
  */
 export function pickBest(summary, { minVisitShare = 0.05 } = {}) {
-  const evaluated = (summary?.actions || []).filter(a => a.score !== null && a.visits > 0)
+  let pool = summary?.actions || []
+  if (pool.some(a => a.exact)) {
+    const top = Math.max(...pool.map(exactRank))
+    pool = pool.filter(a => exactRank(a) === top)
+    // A calculated result needs no playouts behind it.
+    if (!pool.some(a => a.score !== null && a.visits > 0)) return pool[0] || null
+  }
+  const evaluated = pool.filter(a => a.score !== null && a.visits > 0)
   if (!evaluated.length) return null
   const mostVisits = Math.max(...evaluated.map(a => a.visits))
   const threshold = Math.max(1, Math.ceil(mostVisits * minVisitShare))

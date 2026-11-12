@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { actionKey, addResult, createTally, pickBest, scoreMargin, summarize } from '../src/lib/aggregate.js'
+import { actionKey, addResult, createTally, pickBest, scoreMargin, summarize, withExact } from '../src/lib/aggregate.js'
 
 const card = (suit, rank, type = 'public') => ({ type, suit, rank })
 const attack = (suit, rank, type) => ({ type: 'attack', card: card(suit, rank, type) })
@@ -141,4 +141,64 @@ test('score margin shrinks with more samples and is absent without data', () => 
   assert.equal(scoreMargin(0.5, 0), null)
   assert.ok(scoreMargin(0.5, 100) > scoreMargin(0.5, 10000))
   assert.ok(scoreMargin(1, 50) > 0, 'a perfect score from few samples is still uncertain')
+})
+
+// ── Exact endgame results ───────────────────────────────────────────────────
+
+const exactResult = (pairs, value = null) => ({
+  perspective: 'P0', value, nodes: 123,
+  actions: pairs.map(([action, v]) => ({ action, value: v })),
+})
+
+test('a calculated win beats a higher estimate', () => {
+  const tally = createTally()
+  addResult(tally, result([
+    { action: attack('Clubs', 'Six'), visits: 900, score: 0.9 },
+    { action: attack('Clubs', 'Ace'), visits: 100, score: 0.4 },
+    { action: TAKE, visits: 500, score: 0.6 },
+  ]))
+  const legal = [attack('Clubs', 'Six'), attack('Clubs', 'Ace'), TAKE]
+  const plain = summarize(tally, legal)
+  assert.equal(pickBest(plain).action.card.rank, 'Six')
+
+  const exact = exactResult([[attack('Clubs', 'Six'), 'loss'], [attack('Clubs', 'Ace'), 'win'], [TAKE, 'draw']], 'win')
+  const both = withExact(plain, exact)
+  assert.deepEqual(both.actions.map(a => a.exact), ['win', 'draw', 'loss'], 'wins first, losses last')
+  assert.equal(pickBest(both).action.card.rank, 'Ace')
+  assert.equal(both.exactValue, 'win')
+  assert.equal(plain.actions[0].exact, undefined, 'the original summary is left alone')
+})
+
+test('among equal calculated results the estimate decides; unknown sits between draw and loss', () => {
+  const tally = createTally()
+  addResult(tally, result([
+    { action: attack('Clubs', 'Six'), visits: 500, score: 0.2 },
+    { action: attack('Clubs', 'Ace'), visits: 500, score: 0.7 },
+    { action: attack('Hearts', 'Ace'), visits: 500, score: 0.99 },
+    { action: TAKE, visits: 500, score: 0.5 },
+  ]))
+  const legal = [attack('Clubs', 'Six'), attack('Clubs', 'Ace'), attack('Hearts', 'Ace'), TAKE]
+  // Everything settled loses: play the one that gives the opponent most chances to err.
+  const lost = withExact(summarize(tally, legal), exactResult(legal.map(a => [a, 'loss']), 'loss'))
+  assert.equal(pickBest(lost).action.card.suit, 'Hearts')
+
+  // One move unsettled (null), one a draw: the certain draw is preferred to the gamble.
+  const partial = withExact(summarize(tally, legal), exactResult([
+    [legal[0], 'loss'], [legal[1], 'draw'], [legal[2], null], [legal[3], 'loss'],
+  ]))
+  assert.deepEqual(partial.actions.map(a => a.exact), ['draw', null, 'loss', 'loss'])
+  assert.equal(pickBest(partial).action.card.rank, 'Ace')
+  assert.equal(pickBest(partial).action.card.suit, 'Clubs')
+})
+
+test('exact results work before any playout exists, and nothing changes without them', () => {
+  const legal = [attack('Clubs', 'Six'), TAKE]
+  const empty = summarize(null, legal)
+  assert.equal(pickBest(empty), null)
+  const solved = withExact(empty, exactResult([[legal[0], 'loss'], [legal[1], 'win']], 'win'))
+  assert.equal(pickBest(solved).action.type, 'take')
+
+  assert.equal(withExact(empty, null), empty)
+  assert.equal(withExact(empty, exactResult([[legal[0], null], [legal[1], undefined]])), empty, 'nothing settled')
+  assert.equal(withExact(null, exactResult([])), null)
 })

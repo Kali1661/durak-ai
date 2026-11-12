@@ -88,8 +88,19 @@ Treat the score as a way to compare moves, not as an exact probability. It
 depends on random deals and largely random play-outs, it varies from run to
 run, and the search can be wrong. The number of simulations behind each score
 is shown so you can judge how settled it is, and "Search longer" adds more.
-This also holds at the end of a game when every card is known: the score there
-is still an estimate from simulations, not an exact calculation.
+**Calculated results.** In a two-player game, once no cards are hidden - the
+stock is empty or down to the trump card - the app stops estimating and works
+the result out by checking every line of play. Moves are then marked *Wins*,
+*Draw* or *Loses*: a move that wins does so against any defence. A draw means
+both players run out together, or neither can make progress without losing
+(with passing, play can go round in circles). The estimate stays next to it,
+which helps choose between moves with the same calculated result - in a lost
+position, the move that gives the opponent the most chances to go wrong.
+
+Positions with many cards can be too large to finish in the time available;
+the app then shows the result for the moves it settled and estimates for the
+rest. In games with three players, and while cards are still hidden, every
+score is an estimate.
 
 ## Running it
 
@@ -114,7 +125,7 @@ worked before the next. After installing a tool, open a new terminal window.
 
 ```
 durak-online/
-├── durak-core/   Rust engine: rules, validation, search          (tests in tests/)
+├── durak-core/   Rust engine: rules, validation, search, solver  (tests in tests/)
 ├── durak-wasm/   WebAssembly bindings
 └── web/          Svelte app                                      (tests in tests/)
 ```

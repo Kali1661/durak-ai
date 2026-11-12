@@ -1,0 +1,4 @@
+# The exact endgame solver follows long lines of play recursively and needs
+# more stack than WebAssembly's 1 MB default.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=16777216"]

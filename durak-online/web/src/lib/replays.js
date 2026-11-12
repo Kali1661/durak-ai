@@ -45,10 +45,15 @@ export function newRecording({ id, mode, names, playerTypes = null, initial, now
 export function hintSnapshot(summary, bestKey, chosenKey, describe = () => '') {
   if (!summary || !summary.totalVisits) return null
   const moves = summary.actions
-    .filter(a => a.score !== null && a.visits > 0)
-    .map(a => ({ key: a.key, text: describe(a.action), score: a.score, visits: a.visits }))
+    .filter(a => (a.score !== null && a.visits > 0) || a.exact)
+    .map(a => {
+      const move = { key: a.key, text: describe(a.action), score: a.score, visits: a.visits }
+      // 'win' | 'draw' | 'loss' when the exact endgame solver settled the move.
+      if (a.exact) move.exact = a.exact
+      return move
+    })
   if (!moves.length) return null
-  return {
+  const snapshot = {
     best: bestKey || null,
     chosen: chosenKey,
     followed: !!bestKey && bestKey === chosenKey,
@@ -56,6 +61,8 @@ export function hintSnapshot(summary, bestKey, chosenKey, describe = () => '') {
     deals: summary.determinizations || 0,
     moves,
   }
+  if (summary.exactValue) snapshot.exactValue = summary.exactValue
+  return snapshot
 }
 
 /** Append the position reached by one move (or one revealed card). */

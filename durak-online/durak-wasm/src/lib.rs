@@ -188,6 +188,39 @@ pub fn solve(req: JsValue) -> Result<JsValue, JsValue> {
     out(&durak_core::solve(&req.state, params, seed).map_err(err)?)
 }
 
+/// Default limit on positions searched by [`solve_exact`].
+const DEFAULT_EXACT_NODES: u32 = 2_000_000;
+/// Hard limit: each position remembered costs memory.
+const MAX_EXACT_NODES: u32 = 6_000_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExactRequest {
+    pub state: GameState,
+    /// Give up after searching this many positions (default 2 million, at most 6 million).
+    #[serde(default)]
+    pub max_nodes: Option<u32>,
+}
+
+/// Calculate - not estimate - the result of every legal move, when the game
+/// has no hidden cards left (two players, stock empty or down to the trump card).
+///
+/// Returns `{perspective, value, actions, nodes}` where each action is
+/// `{action, value}` and a value is `"win"`, `"draw"` or `"loss"` for the
+/// player to move with best play by both sides. Returns null when the position
+/// cannot be solved exactly or is too large for the node limit.
+#[wasm_bindgen]
+pub fn solve_exact(req: JsValue) -> Result<JsValue, JsValue> {
+    let req: ExactRequest = parse(req, "the exact-solve request")?;
+    let max_nodes = req.max_nodes.unwrap_or(DEFAULT_EXACT_NODES).min(MAX_EXACT_NODES);
+    out(&durak_core::solve_exact(&req.state, u64::from(max_nodes)).map_err(err)?)
+}
+
+/// Whether [`solve_exact`] applies to this position at all.
+#[wasm_bindgen]
+pub fn is_exactly_solvable(state: JsValue) -> Result<bool, JsValue> {
+    Ok(durak_core::is_exactly_solvable(&state_in(state)?))
+}
+
 /// A uniformly random legal action, or null when the game is over.
 #[wasm_bindgen]
 pub fn pick_random_action(state: JsValue) -> Result<JsValue, JsValue> {

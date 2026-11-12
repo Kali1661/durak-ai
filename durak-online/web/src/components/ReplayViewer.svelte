@@ -36,6 +36,7 @@
     else if (e.key === 'End') { go(last); e.preventDefault() }
   }
 
+  const EXACT_TEXT = { win: 'wins', draw: 'draw', loss: 'loses' }
   const RESULT_TEXT = { win: 'You were not the durak', loss: 'You were the durak', draw: 'A draw', unfinished: 'Not finished' }
 </script>
 
@@ -63,7 +64,7 @@
       <ul class="m-0 mt-1 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs">
         {#each step.hint.moves as m (m.key)}
           <li class={m.key === step.hint.chosen ? 'font-bold text-ink' : 'text-muted'}>
-            {m.text || m.key}: {pct(m.score)}{#if m.key === step.hint.best} ★{/if}{#if m.key === step.hint.chosen} (played){/if}
+            {m.text || m.key}: {#if m.exact}<span class={m.exact === 'loss' ? 'text-danger' : m.exact === 'win' ? 'text-accent' : ''}>{EXACT_TEXT[m.exact]}</span>{#if m.score !== null && m.score !== undefined}, est. {pct(m.score)}{/if}{:else}{pct(m.score)}{/if}{#if m.key === step.hint.best} ★{/if}{#if m.key === step.hint.chosen} (played){/if}
           </li>
         {/each}
       </ul>

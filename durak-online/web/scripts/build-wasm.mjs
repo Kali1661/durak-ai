@@ -29,7 +29,7 @@ function newestSource() {
       newest = Math.max(newest, st.mtimeMs)
     }
   }
-  for (const part of ['durak-core/src', 'durak-core/Cargo.toml', 'durak-wasm/src', 'durak-wasm/Cargo.toml', 'Cargo.toml', 'Cargo.lock']) {
+  for (const part of ['durak-core/src', 'durak-core/Cargo.toml', 'durak-wasm/src', 'durak-wasm/Cargo.toml', 'Cargo.toml', 'Cargo.lock', '.cargo/config.toml']) {
     visit(join(root, part))
   }
   return newest
