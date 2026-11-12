@@ -568,7 +568,15 @@
     history = []
     log = []
     notice = null
+    // A new game starts from a blank card selection.
+    setup = cleanSetup({ starter: setup.starter })
     refresh()
+    saveGame()
+  }
+
+  /** Unselect the trump and every chosen hand card. */
+  function clearSetupCards() {
+    setup = { ...setup, trump: null, hand: [] }
     saveGame()
   }
 
@@ -837,6 +845,9 @@
 
           <div class="mt-6 flex flex-wrap items-center gap-3 border-t border-line pt-4">
             <button type="button" class="btn btn-primary px-6" disabled={!playMode && !setupReady} on:click={startGame}>{playMode ? 'Deal the cards' : 'Start tracking'}</button>
+            {#if !playMode}
+              <button type="button" class="btn" disabled={!setup.trump && setup.hand.length === 0} on:click={clearSetupCards}>Reset cards</button>
+            {/if}
             {#if playMode}
               <p class="m-0 text-sm text-muted">Whoever holds the lowest trump attacks first.</p>
             {:else if !setupReady}
