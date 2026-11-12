@@ -1,0 +1,6 @@
+# Positions from real games where the search spent a trump (see examples/arena.rs for the format).
+# name|trump|attacker|phase|batch|my hand|opponent hand|table|stock|discard|played|note
+game 2026-11-13 step 62|H|P1|D|1|KH JD JC 6H JH 8H|AC ?? ?? ?? TS AS TC TH KC|9S|7H ?? ?? ?? ?? ??|8S KS 8C QH 8D KD 6D TD 6C 7C 6S 7S 7D AD|beat 9♠ with 6♥|stock 6, opponent holds 9 cards
+game 2026-11-13 step 72|H|P1|D|1|KH JD JC 8H JH 9D|AC ?? ?? ?? TS KC TH|TC|7H ?? ?? ??|8S KS 8C QH 8D KD 6D TD 6C 7C 6S 7S 7D AD 9S 6H QS AS|beat 10♣ with J♣|plain card available
+game 2026-11-13 step 75|H|P1|D|1|KH JD 9D 8H JH|AC TH ?? ?? TS KC|TC/JC JS|7H ?? ?? ??|8S KS 8C QH 8D KD 6D TD 6C 7C 6S 7S 7D AD 9S 6H QS AS|beat J♠ with 8♥|second card of the trick
+game 2026-11-13 step 82|H|P1|D|1|KH JD 9D JH TC JC JS 8H TS|AC TH ?? ?? KC|QC|7H ?? ??|8S KS 8C QH 8D KD 6D TD 6C 7C 6S 7S 7D AD 9S 6H QS AS|beat Q♣ with 8♥|after taking, 9 cards in hand

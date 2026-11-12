@@ -183,6 +183,7 @@ pub fn solve(req: JsValue) -> Result<JsValue, JsValue> {
         rollouts: req.rollouts_per_determinization.unwrap_or(DEFAULT_ROLLOUTS),
         max_depth: req.max_depth.unwrap_or(DEFAULT_MAX_DEPTH),
         exploration: EXPLORATION,
+        playout: Default::default(),
     };
     let seed = req.seed.unwrap_or_else(random_seed);
     out(&durak_core::solve(&req.state, params, seed).map_err(err)?)

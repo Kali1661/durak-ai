@@ -134,7 +134,7 @@ fn pooling_adds_visits_across_determinizations() {
 fn truncated_playouts_count_as_unknown_not_as_losses() {
     let s = GameState::new_computer_game(2, GameConfig::default()).unwrap();
     // A two-move limit can never finish a fresh game.
-    let p = SolveParams { determinizations: 2, rollouts: 200, max_depth: 2, exploration: 1.41 };
+    let p = SolveParams { determinizations: 2, rollouts: 200, max_depth: 2, exploration: 1.41, ..SolveParams::default() };
     let r = solve(&s, p, 5).unwrap();
     assert_eq!(r.total_cutoffs, r.total_visits);
     for e in &r.actions {
@@ -156,7 +156,7 @@ fn a_finished_game_has_nothing_to_evaluate() {
 fn solve_rejects_bad_requests() {
     let s = GameState::new_computer_game(2, GameConfig::default()).unwrap();
     for (d, r, depth) in [(0, 100, 100), (1, 0, 100), (1, 100, 0)] {
-        let p = SolveParams { determinizations: d, rollouts: r, max_depth: depth, exploration: 1.41 };
+        let p = SolveParams { determinizations: d, rollouts: r, max_depth: depth, exploration: 1.41, ..SolveParams::default() };
         assert!(matches!(solve(&s, p, 1), Err(EngineError::InvalidInput(_))));
     }
     let huge = SolveParams { determinizations: MAX_DETERMINIZATIONS + 1, ..SolveParams::default() };
@@ -189,6 +189,6 @@ fn tree_search_requires_a_fully_known_state() {
         c(Clubs, Nine), c(Clubs, Ten), c(Clubs, Jack),
     ];
     let s = GameState::new_manual_game(c(Hearts, Six), hand, 0, vec![], GameConfig::default()).unwrap();
-    assert!(mcts_evaluate_actions(&s, 1, P0, 10, 100, 1.41).is_err());
+    assert!(mcts_evaluate_actions(&s, 1, P0, 10, 100, 1.41, Playout::Random).is_err());
     assert!(solve(&s, params(2, 50), 1).is_ok(), "solve determinizes first");
 }

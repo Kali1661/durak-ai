@@ -23,7 +23,7 @@
   const pct = score => `${Math.round(score * 100)}%`
   const go = i => { index = Math.max(0, Math.min(last, i)) }
 
-  function cardsOf(pid) {
+  function cardsOf(gs, pid) {
     const hand = handOf(gs, pid)
     const known = sortCards(hand.filter(c => !isUnknown(c)).map(parseCard), gs.trump)
     return { known, hidden: hand.length - known.length, count: hand.length }
@@ -73,7 +73,7 @@
 
   <div class="mt-3 grid gap-3 {opponents.length > 1 ? 'sm:grid-cols-2' : ''}">
     {#each opponents as pid}
-      {@const h = cardsOf(pid)}
+      {@const h = cardsOf(gs, pid)}
       <Seat name={nameOf(pid)} role={roleOf(gs, pid)} toMove={actor === pid} out={isOut(gs, pid)} cardCount={h.count}>
         <div class="flex min-h-[3.9rem] flex-wrap items-end gap-1">
           {#each h.known as c (cardKey(c))}<Card card={c} size="sm" />{/each}
@@ -121,8 +121,8 @@
   </section>
 
   <div class="mt-3">
-    <Seat name="You" you role={roleOf(gs, ME)} toMove={actor === ME} out={isOut(gs, ME)} cardCount={cardsOf(ME).count}>
-      {@const h = cardsOf(ME)}
+    <Seat name="You" you role={roleOf(gs, ME)} toMove={actor === ME} out={isOut(gs, ME)} cardCount={cardsOf(gs, ME).count}>
+      {@const h = cardsOf(gs, ME)}
       <div class="flex min-h-[3.9rem] flex-wrap items-end gap-1.5">
         {#each h.known as c (cardKey(c))}<Card card={c} size="sm" />{/each}
         {#each Array(h.hidden) as _}<Card faceDown size="sm" label="Card not entered yet" />{/each}

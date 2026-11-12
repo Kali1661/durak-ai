@@ -28,11 +28,13 @@
 
 mod endgame;
 mod mcts;
+pub mod policy;
 
 #[doc(hidden)]
 pub use endgame::solve_exact_reference;
 pub use endgame::{is_exactly_solvable, solve_exact, ExactAction, ExactResult, ExactValue};
 
+pub use policy::Playout;
 pub use mcts::{
     mcts_evaluate_actions, solve, ActionEval, MctsEval, SolveParams, SolveResult,
     MAX_DETERMINIZATIONS, MAX_ROLLOUTS, MAX_SEARCH_DEPTH,

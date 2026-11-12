@@ -20,9 +20,10 @@
 //! picks the child that is best for themselves (max^n), so opponents are
 //! modelled as playing for their own result.
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
+use crate::policy::{self, Playout};
 use crate::{Action, EngineError, GameState, Outcome, PlayerId, MAX_PLAYERS};
 
 /// Upper bounds accepted by [`solve`]; larger requests are rejected.
@@ -78,6 +79,7 @@ pub fn mcts_evaluate_actions(
     rollouts: u32,
     max_depth: u32,
     exploration: f64,
+    playout: Playout,
 ) -> Result<MctsEval, EngineError> {
     if !state.is_fully_known() {
         return internal("search needs a state without unknown cards; determinize it first");
@@ -130,14 +132,15 @@ pub fn mcts_evaluate_actions(
             path.push(child);
         }
 
-        // Random playout.
+        // Playout: random or heuristic players (see `policy`).
         let mut depth = 0u32;
         while !s.is_terminal() && depth < max_depth {
             let acts = s.legal_actions();
             if acts.is_empty() {
                 return internal("a running game has no legal actions");
             }
-            s.execute(&acts[rng.gen_range(0..acts.len())])?;
+            let i = policy::choose(&s, &acts, playout, &mut rng);
+            s.execute(&acts[i])?;
             depth += 1;
         }
 
@@ -196,11 +199,14 @@ pub struct SolveParams {
     pub max_depth: u32,
     /// UCT exploration constant.
     pub exploration: f64,
+    /// How the players move in a playout.
+    #[serde(default)]
+    pub playout: Playout,
 }
 
 impl Default for SolveParams {
     fn default() -> Self {
-        Self { determinizations: 1, rollouts: 1000, max_depth: 500, exploration: 1.41 }
+        Self { determinizations: 1, rollouts: 1000, max_depth: 500, exploration: 1.41, playout: Playout::default() }
     }
 }
 
@@ -284,6 +290,7 @@ pub fn solve(state: &GameState, params: SolveParams, seed: u64) -> Result<SolveR
             params.rollouts,
             params.max_depth,
             params.exploration,
+            params.playout,
         )?;
 
         for e in eval.actions {
