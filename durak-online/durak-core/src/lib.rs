@@ -1,6 +1,6 @@
 //! Durak core engine: rules, state transitions and a determinized MCTS evaluator.
 //!
-//! Supported tables: 2 or 3 players, decks of 32-52 cards, six-card hands.
+//! Supported tables: 2 or 3 players, decks of 24, 36 or 52 cards, six-card hands.
 //!
 //! Rule summary (the variant this engine implements):
 //! * One attack card is played at a time; the defender answers before the next.
@@ -38,7 +38,8 @@ pub const HAND_SIZE: usize = 6;
 pub const MAX_PILES: usize = 6;
 pub const MIN_PLAYERS: usize = 2;
 pub const MAX_PLAYERS: usize = 3;
-pub const SUPPORTED_DECK_SIZES: [usize; 6] = [32, 36, 40, 44, 48, 52];
+/// 24 = nine to ace, 36 = six to ace, 52 = two to ace.
+pub const SUPPORTED_DECK_SIZES: [usize; 3] = [24, 36, 52];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Suit {

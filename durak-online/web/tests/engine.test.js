@@ -123,7 +123,7 @@ test('the engine rejects bad input with a readable message instead of crashing',
 
   fails(() => wasm.new_computer_game({ seed: 1n }, config({ num_players: 4 })), /2 or 3/)
   fails(() => wasm.new_computer_game({ seed: 1n }, config({ num_players: 6 })), /2 or 3/)
-  fails(() => wasm.new_computer_game({ seed: 1n }, config({ deck_size: 24 })), /not supported/)
+  fails(() => wasm.new_computer_game({ seed: 1n }, config({ deck_size: 32 })), /not supported/)
   fails(() => wasm.new_computer_game({ seed: 1n }, { deck_size: 'big' }), /could not read/)
   fails(() => wasm.legal_actions({ nonsense: true }), /could not read/)
   fails(() => wasm.legal_actions({ ...state, hands: [state.hands[0]] }), /invalid game state/)

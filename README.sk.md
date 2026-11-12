@@ -30,7 +30,7 @@ tmavom vzhľade.
 
 ## Pravidlá
 
-- 2 alebo 3 hráči; balíčky s 32, 36, 40, 44, 48 alebo 52 kartami; v ruke šesť
+- 2 alebo 3 hráči; balíčky s 24 (od deviatky po eso), 36 (od šestky po eso) alebo 52 kartami; v ruke šesť
   kariet.
 - Útočí sa po jednej karte; obranca odpovie skôr, než príde ďalšia.
 - Najviac šesť útočných kariet v jednom kole a nikdy viac nepobitých kariet,
@@ -69,39 +69,22 @@ aby si vedel posúdiť, nakoľko je ustálené; tlačidlo „Search longer" ich 
 
 ## Spustenie
 
-Potrebuješ [Node.js](https://nodejs.org/) 18 alebo novší,
-[Rust](https://rustup.rs/) a
-[wasm-pack](https://rustwasm.github.io/wasm-pack/installer/).
+**Začínaš? Postupuj podľa [podrobného návodu na inštaláciu](INSTALL.sk.md).**
+Pokrýva inštaláciu nástrojov, stiahnutie projektu aj riešenie bežných chýb.
+
+V skratke, ak máš nainštalovaný [Git](https://git-scm.com/),
+[Node.js](https://nodejs.org/) 18+, [Rust](https://rustup.rs/) a
+[wasm-pack](https://rustwasm.github.io/wasm-pack/installer/):
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack
-
-cd durak-online/web
+git clone https://github.com/Kali1661/durak-ai.git
+cd durak-ai/durak-online/web
 npm install
 npm run dev
 ```
 
-Otvor <http://localhost:5173>. `npm run dev` pri prvom spustení zostaví
-WebAssembly engine; po zmene kódu v Ruste ho znovu zostavíš príkazom
-`npm run wasm`.
-
-| Príkaz (v `durak-online/web`) | Čo robí |
-|---|---|
-| `npm run dev` | Spustí vývojový server |
-| `npm run build` | Zostaví engine a vytvorí statickú stránku v `dist/` |
-| `npm run wasm` | Zostaví iba WebAssembly engine |
-| `npm test` | Spustí testy webovej časti |
-
-Engine má vlastné testy:
-
-```bash
-cd durak-online
-cargo test -p durak-core --release
-```
-
-Obsah priečinka `dist/` sa dá umiestniť na ľubovoľný statický hosting, na
-ľubovoľnú cestu.
+a otvor <http://localhost:5173>. Každý riadok spusti samostatne a pred ďalším
+over, že prebehol. Po inštalácii nástroja otvor nové okno terminálu.
 
 ## Štruktúra projektu
 

@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "wasm": "node scripts/build-wasm.mjs",
-    "dev": "node scripts/build-wasm.mjs --if-missing && vite",
+    "dev": "node scripts/build-wasm.mjs --if-stale && vite",
     "build": "node scripts/build-wasm.mjs && vite build",
     "preview": "vite preview",
-    "test": "node scripts/build-wasm.mjs --if-missing && node --test"
+    "test": "node scripts/build-wasm.mjs --if-stale && node --test"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",

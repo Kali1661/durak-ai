@@ -21,7 +21,8 @@ test('only two or three players survive, including old 4-6 player saves', () => 
 })
 
 test('unsupported deck sizes fall back to 36', () => {
-  assert.equal(sanitizeSettings({ deckSize: 24 }).deckSize, 36)
+  for (const old of [32, 40, 44, 48, 20]) assert.equal(sanitizeSettings({ deckSize: old }).deckSize, 36, `deck ${old}`)
+  assert.equal(sanitizeSettings({ deckSize: 24 }).deckSize, 24)
   assert.equal(sanitizeSettings({ deckSize: '52' }).deckSize, 36)
   assert.equal(sanitizeSettings({ deckSize: 52 }).deckSize, 52)
 })

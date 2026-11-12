@@ -34,7 +34,7 @@ fn only_two_or_three_players_are_supported() {
 
 #[test]
 fn only_listed_deck_sizes_are_supported() {
-    for size in [0, 4, 12, 24, 35, 37, 54, 1000] {
+    for size in [0, 4, 12, 20, 28, 32, 35, 37, 40, 44, 48, 54, 1000] {
         assert!(cfg(size, 2).validate().is_err(), "deck of {size}");
         assert!(GameState::new_computer_game(1, cfg(size, 2)).is_err());
         assert!(full_deck(size).is_err());
@@ -211,4 +211,21 @@ fn reveal_card_only_accepts_unseen_cards_for_unknown_slots() {
     s.validate().unwrap();
     assert_eq!(s.hands[1].iter().filter(|x| x.is_unknown()).count(), 5);
     assert!(s.reveal_card(P1, c(Spades, Ace)).is_err(), "already revealed");
+}
+
+#[test]
+fn the_24_card_deck_runs_from_nine_to_ace() {
+    let ranks: Vec<Rank> = deck_ranks(24).unwrap().to_vec();
+    assert_eq!(ranks, vec![Nine, Ten, Jack, Queen, King, Ace]);
+    for n in [2, 3] {
+        let s = GameState::new_computer_game(4, cfg(24, n)).unwrap();
+        assert_eq!(s.stock.len(), 24 - n * HAND_SIZE);
+        assert!(s.hands.iter().flatten().chain(s.stock.iter()).all(|c| c.rank() >= Nine));
+    }
+    // A six is not part of this deck.
+    let hand = vec![
+        c(Clubs, Nine), c(Clubs, Ten), c(Clubs, Jack),
+        c(Clubs, Queen), c(Clubs, King), c(Clubs, Six),
+    ];
+    assert!(manual(c(Hearts, Nine), hand, 0, cfg(24, 3)).is_err());
 }

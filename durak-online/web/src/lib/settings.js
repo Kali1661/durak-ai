@@ -22,11 +22,8 @@ export const AI_TYPES = [
 export const PLAYER_COUNTS = [2, 3]
 
 export const DECK_SIZES = [
-  { value: 32, label: '32 cards (7 to ace)' },
+  { value: 24, label: '24 cards (9 to ace)' },
   { value: 36, label: '36 cards (6 to ace)' },
-  { value: 40, label: '40 cards (5 to ace)' },
-  { value: 44, label: '44 cards (4 to ace)' },
-  { value: 48, label: '48 cards (3 to ace)' },
   { value: 52, label: '52 cards (2 to ace)' },
 ]
 

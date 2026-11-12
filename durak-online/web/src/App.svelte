@@ -237,7 +237,7 @@
         kind: 'info',
         text: gs
           ? 'Your saved game was restored, but its undo history could not be read and was cleared.'
-          : 'A saved game from an earlier version could not be restored and was discarded. Start a new game below.',
+          : 'Your saved game could not be restored - it uses a setting this version does not support (such as a removed deck size) or is damaged - so it was discarded. Start a new game below.',
       }
       saveGame()
     }

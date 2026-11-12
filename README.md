@@ -28,7 +28,7 @@ dark theme.
 
 ## Rules implemented
 
-- 2 or 3 players; decks of 32, 36, 40, 44, 48 or 52 cards; six-card hands.
+- 2 or 3 players; decks of 24 (nine to ace), 36 (six to ace) or 52 cards; six-card hands.
 - One attack card at a time; the defender answers before the next one.
 - At most six attack cards per trick, and never more unanswered cards than the
   defender holds.
@@ -64,36 +64,22 @@ is shown so you can judge how settled it is, and "Search longer" adds more.
 
 ## Running it
 
-You need [Node.js](https://nodejs.org/) 18 or newer, [Rust](https://rustup.rs/),
-and [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/).
+**New to this? Follow the [step-by-step installation guide](INSTALL.md).** It
+covers installing the tools, downloading the project and fixing common errors.
+
+In short, with [Git](https://git-scm.com/), [Node.js](https://nodejs.org/) 18+,
+[Rust](https://rustup.rs/) and [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
+installed:
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack
-
-cd durak-online/web
+git clone https://github.com/Kali1661/durak-ai.git
+cd durak-ai/durak-online/web
 npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. `npm run dev` builds the WebAssembly engine the
-first time; run `npm run wasm` to rebuild it after changing Rust code.
-
-| Command (in `durak-online/web`) | What it does |
-|---|---|
-| `npm run dev` | Start the development server |
-| `npm run build` | Rebuild the engine and produce a static site in `dist/` |
-| `npm run wasm` | Rebuild only the WebAssembly engine |
-| `npm test` | Run the browser-side tests |
-
-The engine has its own tests:
-
-```bash
-cd durak-online
-cargo test -p durak-core --release
-```
-
-The contents of `dist/` can be hosted on any static file host, from any path.
+then open <http://localhost:5173>. Run each line on its own and check it
+worked before the next. After installing a tool, open a new terminal window.
 
 ## Project layout
 

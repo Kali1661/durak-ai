@@ -5,7 +5,7 @@ app does and how to set up Rust and wasm-pack.
 
 ```bash
 npm install
-npm run dev      # development server (builds the WASM engine if it is missing)
+npm run dev      # development server (rebuilds the WASM engine if the Rust code changed)
 npm run wasm     # rebuild the WASM engine after changing Rust code
 npm test         # unit tests + end-to-end tests against the real engine
 npm run build    # rebuild the engine and write a static site to dist/
