@@ -5,7 +5,7 @@ use common::*;
 use durak_core::*;
 
 fn cfg(deck_size: usize, num_players: usize) -> GameConfig {
-    GameConfig { deck_size, num_players, reflecting: false, trump_reflecting: false }
+    GameConfig { deck_size, num_players, ..GameConfig::default() }
 }
 
 fn my_hand() -> Vec<Card> {

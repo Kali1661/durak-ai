@@ -30,8 +30,8 @@ tmavom vzhľade.
 
 ## Pravidlá
 
-- 2 alebo 3 hráči; balíčky s 24 (od deviatky po eso), 36 (od šestky po eso) alebo 52 kartami; v ruke šesť
-  kariet.
+- 2 alebo 3 hráči; balíčky s 24 (od deviatky po eso), 36 (od šestky po eso)
+  alebo 52 kartami; v ruke šesť kariet.
 - Útočí sa po jednej karte; obranca odpovie skôr, než príde ďalšia.
 - Najviac šesť útočných kariet v jednom kole a nikdy viac nepobitých kariet,
   než má obranca v ruke.
@@ -41,18 +41,30 @@ tmavom vzhľade.
   Obranca, ktorý karty zobral, prichádza o svoj útok.
 - V hre rozdanej počítačom útočí ako prvý ten, kto má najnižší tromf.
 - Hra končí, keď je balíček prázdny a karty drží najviac jeden hráč. Ten je
-  durak. Ak posledný obranca pobije posledný útok svojou poslednou kartou,
-  nikto nedrží karty a hra končí **remízou**.
+  durak.
 
-Dve voliteľné pravidlá, ktoré sa vyberajú pri začatí hry:
+Pri začatí hry sa vyberá tlačidlami podľa vzoru aplikácie Durak Online:
 
-- **Prekladanie (Reflecting)** - kým obranca ešte nič nepobil, môže zahrať
-  kartu rovnakej hodnoty a presunúť celý útok na ďalšieho hráča, ak má ten
-  dosť kariet, aby naň odpovedal. Pri dvoch hráčoch sa útok vracia pôvodnému
-  útočníkovi.
-- **Prekladanie ukázaním tromfu (Reflecting by showing a trump)** - obranca
-  môže namiesto toho ukázať tromf danej hodnoty a ponechať si ho. Každý tromf
-  sa dá ukázať raz za kolo.
+- **throw-in / passing** (prihadzovanie / prekladanie) - pri *passing* môže
+  obranca, kým ešte nič nepobil, zahrať kartu rovnakej hodnoty a presunúť celý
+  útok na ďalšieho hráča, ak má ten dosť kariet, aby naň odpovedal. Pri dvoch
+  hráčoch sa útok vracia pôvodnému útočníkovi.
+- **classic / draw** (klasika / remíza) - čo sa stane, keď posledný obranca
+  pobije posledný útok svojou poslednou kartou a poslední dvaja hráči sa kariet
+  zbavia naraz. *Draw*: hra končí remízou. *Classic*: remízy nie sú a durakom je
+  útočník, ktorý túto poslednú kartu zahral.
+- **Päť kariet pred prvým odhodením** (predvolene zapnuté) - kým sa prvýkrát
+  neodhodia karty, kolo môže mať najviac päť útočných kariet.
+- **Prekladanie ukázaním tromfu** (predvolene vypnuté) - pri zapnutom
+  prekladaní môže obranca preložiť aj ukázaním tromfu danej hodnoty a ponechať
+  si ho, každý tromf raz za kolo. Durak Online toto pravidlo nemá.
+
+Ak chceš zrkadliť hru z Durak Online, vyber rovnaký počet hráčov, balíček,
+*throw-in* alebo *passing* a *classic* alebo *draw* ako v aplikácii, nechaj
+pravidlo piatich kariet zapnuté a pravidlo tromfu vypnuté. V aplikácii zvoľ
+*fair play*; *neighbors* a *all* sa pri dvoch či troch hráčoch správajú rovnako.
+Jeden rozdiel zostáva: v aplikácii môže útočník vyložiť naraz viac kariet rovnakej
+hodnoty, tu sa zadávajú po jednej.
 
 ## O odporúčaniach
 
@@ -112,7 +124,7 @@ Oproti pôvodnej verzii táto verzia:
 
 - podporuje iba stoly pre dvoch a troch hráčov;
 - v skutočnej hre umožňuje zvoliť, kto útočí ako prvý;
-- rozpoznáva remízy a dodržiava limit šiestich kariet na kolo;
+- ponúka klasický koniec alebo remízu a päť kariet v prvom kole, ako Durak Online;
 - pri každom odporúčaní ukazuje, koľko simulácií za ním stojí;
 - má nové rozhranie s rozložením pre telefón a podporou klávesnice a čítačiek
   obrazovky.

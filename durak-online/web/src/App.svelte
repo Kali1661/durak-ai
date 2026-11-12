@@ -5,6 +5,8 @@
   import Seat from './components/Seat.svelte'
   import MoveRow from './components/MoveRow.svelte'
   import ThemeToggle from './components/ThemeToggle.svelte'
+  import ModeTile from './components/ModeTile.svelte'
+  import PillChoice from './components/PillChoice.svelte'
   import { cardLabel, suitSymbol } from './lib/cards.js'
   import {
     AI_TYPES, DECK_SIZES, LIMITS, PLAYER_COUNTS, PlayerType,
@@ -713,37 +715,64 @@
             {/if}
           </p>
 
-          <div class="mt-5 grid gap-5 sm:grid-cols-2">
+          <div class="mt-5 flex flex-wrap gap-x-8 gap-y-5">
             <div>
-              <span class="field-label" id="players-label">Players at the table</span>
-              <div class="seg" role="radiogroup" aria-labelledby="players-label">
-                {#each PLAYER_COUNTS as n}
-                  <button type="button" class="seg-item" role="radio" aria-checked={settings.numPlayers === n ? 'true' : 'false'} on:click={() => update({ numPlayers: n })}>
-                    {n} players{n === 2 ? ' (1 v 1)' : ''}
-                  </button>
-                {/each}
-              </div>
+              <h3 class="field-label">Players</h3>
+              <PillChoice label="Players at the table" value={settings.numPlayers}
+                options={PLAYER_COUNTS.map(n => ({ value: n, text: String(n), hint: n === 2 ? '1 v 1' : 'You and two opponents' }))}
+                on:change={e => update({ numPlayers: e.detail })} />
             </div>
             <div>
-              <label class="field-label" for="deck">Deck</label>
-              <select id="deck" class="field" value={settings.deckSize} on:change={e => update({ deckSize: Number(e.currentTarget.value) })}>
-                {#each DECK_SIZES as d}<option value={d.value}>{d.label}</option>{/each}
-              </select>
+              <h3 class="field-label">Card deck</h3>
+              <PillChoice label="Card deck" value={settings.deckSize}
+                options={DECK_SIZES.map(d => ({ value: d.value, text: String(d.value), hint: d.label }))}
+                on:change={e => update({ deckSize: e.detail })} />
+              <p class="field-help">{DECK_SIZES.find(d => d.value === settings.deckSize)?.label}</p>
             </div>
           </div>
 
+          <div class="mt-5">
+            <h3 class="field-label">Game modes</h3>
+            <div class="flex flex-wrap gap-3">
+              <ModeTile label="Passing the attack on" value={settings.reflecting}
+                options={[
+                  { value: false, title: 'throw-in', icon: 'throw-in', hint: 'No passing: the defender must beat the cards or take them' },
+                  { value: true, title: 'passing', icon: 'passing', hint: 'The defender may pass the attack on with a card of the same rank' },
+                ]}
+                on:change={e => update({ reflecting: e.detail, trumpReflecting: e.detail && settings.trumpReflecting })} />
+              <ModeTile label="End of the game" value={settings.classicEnding}
+                options={[
+                  { value: true, title: 'classic', icon: 'classic', hint: 'No draws: if the last two players run out together, the attacker loses' },
+                  { value: false, title: 'draw', icon: 'draw', hint: 'If the last two players run out together, the game is a draw' },
+                ]}
+                on:change={e => update({ classicEnding: e.detail })} />
+            </div>
+            <ul class="m-0 mt-3 list-none space-y-1 p-0 text-xs text-muted">
+              <li><strong class="text-ink">{settings.reflecting ? 'passing' : 'throw-in'}:</strong>
+                {settings.reflecting
+                  ? `before beating anything, the defender may play a card of the same rank to pass the attack on${settings.numPlayers === 2 ? ' - with two players, back to the attacker' : ' to the next player'}.`
+                  : 'the defender must beat the cards or take them; others may throw in cards of ranks already on the table.'}</li>
+              <li><strong class="text-ink">{settings.classicEnding ? 'classic' : 'draw'}:</strong>
+                {settings.classicEnding
+                  ? 'no draws - if the defender beats the final attack with their last card, the attacker who played it loses.'
+                  : 'if the defender beats the final attack with their last card, the game is a draw.'}</li>
+            </ul>
+          </div>
+
           <fieldset class="mt-5 rounded-xl border border-line p-3">
-            <legend class="px-1 text-sm font-semibold">Optional rules</legend>
+            <legend class="px-1 text-sm font-semibold">More rules</legend>
             <label class="flex min-h-[44px] cursor-pointer items-start gap-3 py-1">
-              <input type="checkbox" class="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={settings.reflecting} on:change={e => update({ reflecting: e.currentTarget.checked })} />
-              <span><span class="block text-sm font-semibold">Reflecting</span>
-                <span class="block text-xs text-muted">Before defending anything, the defender may play a card of the same rank to pass the attack on{settings.numPlayers === 2 ? ' - with two players, back to the attacker' : ' to the next player'}.</span></span>
+              <input type="checkbox" class="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={settings.firstTrickLimit} on:change={e => update({ firstTrickLimit: e.currentTarget.checked })} />
+              <span><span class="block text-sm font-semibold">Five cards before the first discard</span>
+                <span class="block text-xs text-muted">Until cards have been discarded once, a trick holds at most 5 attacking cards; after that, 6. Durak Online plays this way.</span></span>
             </label>
-            <label class="flex min-h-[44px] cursor-pointer items-start gap-3 py-1">
-              <input type="checkbox" class="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={settings.trumpReflecting} on:change={e => update({ trumpReflecting: e.currentTarget.checked })} />
-              <span><span class="block text-sm font-semibold">Reflecting by showing a trump</span>
-                <span class="block text-xs text-muted">The defender may instead show the trump of that rank and keep it. Each trump can be shown once per trick.</span></span>
-            </label>
+            {#if settings.reflecting}
+              <label class="flex min-h-[44px] cursor-pointer items-start gap-3 py-1">
+                <input type="checkbox" class="mt-1 h-5 w-5 accent-[rgb(var(--accent))]" checked={settings.trumpReflecting} on:change={e => update({ trumpReflecting: e.currentTarget.checked })} />
+                <span><span class="block text-sm font-semibold">Also pass by showing a trump</span>
+                  <span class="block text-xs text-muted">The defender may pass by showing the trump of that rank and keeping it, once per trump per trick. Not available in Durak Online - leave it off to match that app.</span></span>
+              </label>
+            {/if}
           </fieldset>
 
           <div class="mt-5">

@@ -27,6 +27,8 @@ pub struct Pos {
     pub reflecting: bool,
     pub trump_reflecting: bool,
     pub deck_size: usize,
+    pub first_trick_limit: bool,
+    pub classic_ending: bool,
 }
 
 impl Pos {
@@ -42,6 +44,8 @@ impl Pos {
             reflecting: false,
             trump_reflecting: false,
             deck_size: 36,
+            first_trick_limit: false,
+            classic_ending: false,
         }
     }
 
@@ -91,6 +95,8 @@ impl Pos {
                 num_players: n,
                 trump_reflecting: self.trump_reflecting,
                 reflecting: self.reflecting,
+                first_trick_limit: self.first_trick_limit,
+                classic_ending: self.classic_ending,
             },
         }
     }

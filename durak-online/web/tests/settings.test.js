@@ -77,7 +77,9 @@ test('names are trimmed, bounded, and old defaults are replaced', () => {
 
 test('game config uses the engine field names', () => {
   const config = settingsToGameConfig(sanitizeSettings({ numPlayers: 3, deckSize: 52, reflecting: true }))
-  assert.deepEqual(config, { deck_size: 52, num_players: 3, trump_reflecting: false, reflecting: true })
+  assert.deepEqual(config, {
+    deck_size: 52, num_players: 3, trump_reflecting: false, reflecting: true, first_trick_limit: true, classic_ending: false,
+  })
 })
 
 test('sanitising is idempotent', () => {

@@ -24,6 +24,8 @@ export default {
         danger: token('danger'),
         attack: token('attack'),
         defend: token('defend'),
+        paper: token('paper'),
+        pick: token('pick'),
       },
       fontFamily: {
         display: ['Georgia', 'Cambria', '"Times New Roman"', 'serif'],

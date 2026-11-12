@@ -47,6 +47,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   numPlayers: 2,
   trumpReflecting: false,
   reflecting: false,
+  // Five attack cards at most until the first discard (Durak Online does this).
+  firstTrickLimit: true,
+  // true = no draws: if the last two players run out together, the last attacker loses.
+  classicEnding: false,
   numThreads: Math.max(1, Math.min(8, Math.floor(maxThreads() / 2) || 1)),
   playerNames: Object.freeze({ P1: 'Opponent 1', P2: 'Opponent 2' }),
   playerTypes: Object.freeze({ P1: PlayerType.MCTS, P2: PlayerType.MCTS }),
@@ -93,6 +97,8 @@ export function sanitizeSettings(raw) {
     numPlayers: PLAYER_COUNTS.includes(src.numPlayers) ? src.numPlayers : d.numPlayers,
     trumpReflecting: bool(src.trumpReflecting, d.trumpReflecting),
     reflecting: bool(src.reflecting, d.reflecting),
+    firstTrickLimit: bool(src.firstTrickLimit, d.firstTrickLimit),
+    classicEnding: bool(src.classicEnding, d.classicEnding),
     numThreads: clampInt(src.numThreads, [1, maxThreads()], Math.min(d.numThreads, maxThreads())),
     playerNames: {
       P1: cleanName(legacyName(names.P1), d.playerNames.P1),
@@ -136,5 +142,7 @@ export function settingsToGameConfig(settings) {
     num_players: settings.numPlayers,
     trump_reflecting: settings.trumpReflecting,
     reflecting: settings.reflecting,
+    first_trick_limit: settings.firstTrickLimit,
+    classic_ending: settings.classicEnding,
   }
 }

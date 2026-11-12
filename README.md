@@ -28,7 +28,8 @@ dark theme.
 
 ## Rules implemented
 
-- 2 or 3 players; decks of 24 (nine to ace), 36 (six to ace) or 52 cards; six-card hands.
+- 2 or 3 players; decks of 24 (nine to ace), 36 (six to ace) or 52 cards;
+  six-card hands.
 - One attack card at a time; the defender answers before the next one.
 - At most six attack cards per trick, and never more unanswered cards than the
   defender holds.
@@ -37,17 +38,30 @@ dark theme.
   last. A defender who takes the cards misses their turn to attack.
 - In dealt games, whoever holds the lowest trump attacks first.
 - The game ends when the stock is empty and at most one player still holds
-  cards. That player is the durak. If the last defender beats the final attack
-  with their last card, nobody holds cards and the game is a **draw**.
+  cards. That player is the durak.
 
-Two optional rules, chosen when you start a game:
+Chosen when you start a game, with buttons modelled on the Durak Online app:
 
-- **Reflecting** - before defending anything, the defender may play a card of
-  the same rank to pass the whole attack to the next player, provided that
-  player holds enough cards to answer it. With two players the attack goes back
-  to the original attacker.
-- **Reflecting by showing a trump** - the defender may instead show the trump of
-  that rank and keep it. Each trump can be shown once per trick.
+- **throw-in / passing** - with *passing*, before beating anything the defender
+  may play a card of the same rank to pass the whole attack to the next player,
+  provided that player holds enough cards to answer it. With two players the
+  attack goes back to the original attacker.
+- **classic / draw** - what happens when the last defender beats the final
+  attack with their last card, so the last two players run out together.
+  *Draw*: the game is a draw. *Classic*: there are no draws, and the attacker
+  who played that final card is the durak.
+- **Five cards before the first discard** (on by default) - until cards have
+  been discarded for the first time, a trick holds at most five attack cards.
+- **Pass by showing a trump** (off by default) - with passing on, the defender
+  may also pass by showing the trump of that rank and keeping it, once per trump
+  per trick. Durak Online does not have this rule.
+
+To mirror a Durak Online game, choose the same players, deck, *throw-in* or
+*passing* and *classic* or *draw* as in the app, keep the five-card rule on and
+the trump rule off. In that app pick *fair play*; *neighbors* and *all* behave
+the same with two or three players. One difference remains: in that app an
+attacker may lay down several cards of one rank at once, while here they are
+entered one at a time.
 
 ## About the suggestions
 
@@ -106,7 +120,7 @@ Compared with the original, this version:
 
 - supports two- and three-player tables only;
 - lets you choose who attacks first in a real game;
-- recognises drawn games and enforces the six-card limit per trick;
+- offers the classic or draw ending and the five-card first trick, as in Durak Online;
 - shows how many simulations are behind each suggestion;
 - has a new interface with a phone layout and keyboard and screen-reader support.
 

@@ -431,3 +431,195 @@ fn an_opponent_with_unknown_cards_can_only_play_unseen_cards() {
     play(&mut t, &[attack(c(Spades, Ace))]);
     assert_eq!(t.hand_size(P1), 5, "one unknown card turned out to be the ace");
 }
+
+// ── Five-card first trick ───────────────────────────────────────────────────
+
+/// Nothing discarded yet: every card not in a hand is still in the stock.
+fn first_trick(limit: bool) -> GameState {
+    let p0 = vec![
+        c(Clubs, Six), c(Diamonds, Six), c(Spades, Six),
+        c(Clubs, Seven), c(Diamonds, Seven), c(Spades, Seven),
+    ];
+    let p1 = vec![
+        c(Hearts, Seven), c(Hearts, Eight), c(Hearts, Nine),
+        c(Hearts, Ten), c(Hearts, Jack), c(Hearts, Queen),
+    ];
+    let in_hand: Vec<Card> = p0.iter().chain(&p1).copied().collect();
+    let mut stock: Vec<Card> = full_deck(36)
+        .unwrap()
+        .into_iter()
+        .filter(|x| !in_hand.iter().any(|h| h.matches(x)) && !x.matches(&c(Hearts, King)))
+        .map(|x| x.as_private())
+        .collect();
+    stock.insert(0, c(Hearts, King)); // the face-up trump card
+    let mut pos = Pos::new(vec![p0, p1]);
+    pos.stock = stock;
+    pos.first_trick_limit = limit;
+    let s = pos.build();
+    assert!(s.discard.is_empty());
+    s
+}
+
+fn play_five_piles(s: &mut GameState) {
+    let rounds = [
+        (c(Clubs, Six), c(Hearts, Seven)),
+        (c(Diamonds, Six), c(Hearts, Eight)),
+        (c(Spades, Six), c(Hearts, Nine)),
+        (c(Clubs, Seven), c(Hearts, Ten)),
+        (c(Diamonds, Seven), c(Hearts, Jack)),
+    ];
+    for (i, (a, d)) in rounds.into_iter().enumerate() {
+        play(s, &[attack(a), defend_at(i, d)]);
+    }
+}
+
+#[test]
+fn first_trick_stops_at_five_cards_when_the_rule_is_on() {
+    let mut s = first_trick(true);
+    assert_eq!(s.pile_limit(), FIRST_TRICK_PILES);
+    play_five_piles(&mut s);
+    assert_eq!(s.legal_actions(), vec![Action::PassAttack], "7S matches but the first trick is full");
+    let before = s.clone();
+    assert!(s.apply(&attack(c(Spades, Seven))).is_err());
+    assert_eq!(s, before);
+
+    // After the first discard the normal six-card limit applies.
+    play(&mut s, &[Action::PassAttack]);
+    assert!(!s.discard.is_empty());
+    assert_eq!(s.pile_limit(), MAX_PILES);
+}
+
+#[test]
+fn first_trick_allows_six_cards_when_the_rule_is_off() {
+    let mut s = first_trick(false);
+    assert_eq!(s.pile_limit(), MAX_PILES);
+    play_five_piles(&mut s);
+    assert!(has(&s, &attack(c(Spades, Seven))));
+}
+
+#[test]
+fn a_take_does_not_end_the_five_card_period() {
+    let mut s = first_trick(true);
+    // P1 takes instead of defending: nothing is discarded, so the limit stays at five.
+    play(&mut s, &[attack(c(Clubs, Six)), Action::Take, DONE]);
+    assert!(s.discard.is_empty());
+    assert_eq!(s.pile_limit(), FIRST_TRICK_PILES);
+}
+
+/// Five undefended attack cards, nothing discarded yet, and the defender holds a
+/// seven that could pass the attack on.
+fn five_open_piles(limit: bool) -> GameState {
+    let table = vec![
+        pile(c(Clubs, Seven), None),
+        pile(c(Diamonds, Seven), None),
+        pile(c(Clubs, Eight), None),
+        pile(c(Diamonds, Eight), None),
+        pile(c(Spades, Eight), None),
+    ];
+    let p0 = vec![c(Clubs, Nine), c(Clubs, Ten), c(Clubs, Jack), c(Clubs, Queen), c(Clubs, King), c(Clubs, Ace)];
+    let p1 = vec![c(Spades, Seven), c(Spades, Nine), c(Spades, Ten), c(Spades, Jack), c(Spades, Queen), c(Spades, King)];
+    let used: Vec<Card> = p0.iter().chain(&p1).copied().chain(table.iter().map(|p| p.attack)).collect();
+    let mut stock: Vec<Card> = full_deck(36)
+        .unwrap()
+        .into_iter()
+        .filter(|x| !used.iter().any(|u| u.matches(x)) && !x.matches(&c(Hearts, Ace)))
+        .map(|x| x.as_private())
+        .collect();
+    stock.insert(0, c(Hearts, Ace));
+    let mut pos = Pos::new(vec![p0, p1]);
+    pos.table = table;
+    pos.stock = stock;
+    pos.phase = Phase::Defending;
+    pos.reflecting = true;
+    pos.first_trick_limit = limit;
+    let s = pos.build();
+    assert!(s.discard.is_empty());
+    s
+}
+
+#[test]
+fn reflecting_respects_the_first_trick_limit() {
+    let reflect = Action::Reflect { card: c(Spades, Seven) };
+    // A reflect would make a sixth card, which the first trick does not allow.
+    let s = five_open_piles(true);
+    assert!(!has(&s, &reflect));
+    let mut t = s.clone();
+    assert!(t.apply(&reflect).is_err());
+    assert_eq!(t, s);
+    // Without the rule the reflect is fine.
+    assert!(has(&five_open_piles(false), &reflect));
+}
+
+// ── Classic ending ──────────────────────────────────────────────────────────
+
+fn last_cards(classic: bool) -> GameState {
+    let mut pos = Pos::new(vec![vec![c(Clubs, King)], vec![c(Clubs, Ace)]]);
+    pos.classic_ending = classic;
+    let mut s = pos.build();
+    play(&mut s, &[attack(c(Clubs, King))]);
+    s
+}
+
+#[test]
+fn classic_ending_makes_the_last_attacker_the_durak_instead_of_a_draw() {
+    let mut s = last_cards(true);
+    assert_eq!(s.outcome(), Outcome::InProgress, "the defender still has to answer");
+    play(&mut s, &[defend(c(Clubs, Ace))]);
+    assert_eq!(s.outcome(), Outcome::Durak { player: P0 });
+    assert_eq!(s.durak(), Some(P0));
+    assert!(s.legal_actions().is_empty());
+
+    let mut d = last_cards(false);
+    play(&mut d, &[defend(c(Clubs, Ace))]);
+    assert_eq!(d.outcome(), Outcome::Draw);
+}
+
+#[test]
+fn classic_ending_changes_nothing_when_the_defender_takes() {
+    let mut s = last_cards(true);
+    play(&mut s, &[Action::Take]);
+    assert_eq!(s.outcome(), Outcome::Durak { player: P1 });
+}
+
+#[test]
+fn classic_ending_blames_the_player_who_reflected_with_their_last_card() {
+    // P1 passes the attack back with their last card; P0 beats both sevens and
+    // empties their hand at the same moment.
+    let mut pos = Pos::new(vec![
+        vec![c(Clubs, Seven), c(Clubs, Ace), c(Diamonds, Ace)],
+        vec![c(Diamonds, Seven)],
+    ]);
+    pos.reflecting = true;
+    pos.classic_ending = true;
+    let mut s = pos.build();
+    play(&mut s, &[attack(c(Clubs, Seven))]);
+    // P0 holds two cards and would face two: the reflect is allowed.
+    play(&mut s, &[Action::Reflect { card: c(Diamonds, Seven) }]);
+    assert_eq!((s.attacker, s.defender), (P1, P0));
+    play(&mut s, &[defend_at(0, c(Clubs, Ace)), defend_at(1, c(Diamonds, Ace))]);
+    assert_eq!(s.outcome(), Outcome::Durak { player: P1 });
+}
+
+#[test]
+fn the_search_follows_the_chosen_ending() {
+    // Draw rules: beating the last card is worth 1 to the defender, so is the
+    // classic ending. For the attacker the classic ending turns it into a loss.
+    let p = SolveParams { determinizations: 1, rollouts: 500, ..SolveParams::default() };
+    for classic in [false, true] {
+        let s = last_cards(classic);
+        let r = solve(&s, p, 1).unwrap();
+        let beat = r.actions.iter().find(|e| matches!(e.action, Action::Defend { .. })).unwrap();
+        assert_eq!(beat.score, 1.0, "classic = {classic}");
+    }
+    // From the attacker's seat one move earlier: with draws the king leads to a
+    // draw at worst (worth 1); classic makes it a loss once the ace is played.
+    let attacker_view = |classic: bool| {
+        let mut pos = Pos::new(vec![vec![c(Clubs, King)], vec![c(Clubs, Ace)]]);
+        pos.classic_ending = classic;
+        let s = pos.build();
+        solve(&s, p, 2).unwrap().actions[0].score
+    };
+    assert_eq!(attacker_view(false), 1.0);
+    // The score averages playouts, so the few early tries of "take" leave a trace.
+    assert!(attacker_view(true) < 0.1, "classic: {}", attacker_view(true));
+}

@@ -24,6 +24,10 @@
     --danger: 168 32 26;
     --attack: 160 62 8;
     --defend: 24 86 158;
+    /* Card paper and the red used for chosen options; the same in both themes,
+       since they sit on the felt like real cards. */
+    --paper: 253 251 245;
+    --pick: 190 28 44;
     color-scheme: light;
   }
 
@@ -43,6 +47,8 @@
     --danger: 255 143 130;
     --attack: 255 176 110;
     --defend: 140 188 255;
+    --paper: 253 251 245;
+    --pick: 190 28 44;
     color-scheme: dark;
   }
 
@@ -171,6 +177,41 @@
   }
   dialog.sheet::backdrop {
     background: rgb(0 0 0 / 0.55);
+  }
+
+  /* Game-mode tiles and pill pickers, modelled on the Durak Online app. */
+  .mode-tile {
+    @apply flex w-[8.5rem] flex-col overflow-hidden rounded-2xl border border-felt-deep shadow-md sm:w-36;
+  }
+  .mode-half {
+    --tile: var(--felt);
+    @apply relative flex min-h-[6.75rem] flex-col items-center justify-center gap-1.5 bg-felt px-2 py-3 text-center text-on-felt transition-colors;
+  }
+  .mode-half + .mode-half {
+    @apply border-t border-felt-deep;
+  }
+  .mode-half:hover {
+    @apply brightness-110;
+  }
+  .mode-half[aria-checked='true'] {
+    --tile: var(--paper);
+    @apply bg-paper text-pick;
+  }
+  .mode-check {
+    @apply absolute right-2 top-1 text-2xl font-black text-pick;
+  }
+
+  .pill {
+    @apply inline-flex max-w-full flex-wrap overflow-hidden rounded-full border border-felt-deep bg-felt shadow-md;
+  }
+  .pill-item {
+    @apply flex min-h-[56px] items-center gap-1.5 rounded-full px-5 text-on-felt transition-colors sm:px-6;
+  }
+  .pill-item:hover {
+    @apply brightness-110;
+  }
+  .pill-item[aria-checked='true'] {
+    @apply bg-paper text-pick;
   }
 
   .spinner {

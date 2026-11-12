@@ -15,7 +15,13 @@ fn configs() -> Vec<GameConfig> {
     for deck_size in SUPPORTED_DECK_SIZES {
         for num_players in [2, 3] {
             for (reflecting, trump_reflecting) in [(false, false), (true, false), (false, true), (true, true)] {
-                out.push(GameConfig { deck_size, num_players, reflecting, trump_reflecting });
+                for first_trick_limit in [false, true] {
+                    // Alternate the ending so both are covered without doubling the run time.
+                    let classic_ending = first_trick_limit ^ reflecting;
+                    out.push(GameConfig {
+                        deck_size, num_players, reflecting, trump_reflecting, first_trick_limit, classic_ending,
+                    });
+                }
             }
         }
     }
@@ -27,8 +33,15 @@ fn check_finished(s: &GameState) {
     assert!(s.legal_actions().is_empty());
     let holders: Vec<usize> = (0..s.num_players()).filter(|i| !s.hands[*i].is_empty()).collect();
     match s.outcome() {
+        Outcome::Durak { player } if holders.is_empty() => {
+            assert!(s.config.classic_ending, "everyone out is a draw unless the classic ending is on");
+            assert_eq!(player, s.last_played_attacker, "the classic ending blames the last attacker");
+        }
         Outcome::Durak { player } => assert_eq!(holders, vec![player.index()]),
-        Outcome::Draw => assert!(holders.is_empty()),
+        Outcome::Draw => {
+            assert!(holders.is_empty());
+            assert!(!s.config.classic_ending, "the classic ending never produces a draw");
+        }
         Outcome::InProgress => panic!("finished game reports in progress"),
     }
 }

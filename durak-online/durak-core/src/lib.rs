@@ -4,7 +4,8 @@
 //!
 //! Rule summary (the variant this engine implements):
 //! * One attack card is played at a time; the defender answers before the next.
-//! * At most [`MAX_PILES`] attack cards per trick, and never more undefended
+//! * At most [`MAX_PILES`] attack cards per trick (optionally five until the
+//!   first successful defence), and never more undefended
 //!   cards than the defender holds.
 //! * Throw-in: every attacker may add cards whose rank is already on the table.
 //! * Optional *reflecting*: before defending anything, the defender may play a
@@ -14,7 +15,9 @@
 //!   trump of that rank, at most once per trump per trick.
 //! * After a trick, attackers draw first (main attacker first), defender last.
 //! * The game ends when the stock is empty and at most one player holds cards.
-//!   That player is the durak; if nobody holds cards the game is a draw.
+//!   That player is the durak. If nobody holds cards - the last defender beat
+//!   the final attack with their last card - the game is a draw, or with the
+//!   *classic ending* the attacker who played that final card is the durak.
 //!
 //! Every public entry point validates its input and returns an error instead of
 //! panicking. [`GameState::legal_actions`] and [`GameState::apply`] agree
@@ -36,6 +39,8 @@ use std::collections::HashSet;
 pub const HAND_SIZE: usize = 6;
 /// Maximum number of attack cards (piles) in a single trick.
 pub const MAX_PILES: usize = 6;
+/// Attack-card limit before the first discard when [`GameConfig::first_trick_limit`] is on.
+pub const FIRST_TRICK_PILES: usize = 5;
 pub const MIN_PLAYERS: usize = 2;
 pub const MAX_PLAYERS: usize = 3;
 /// 24 = nine to ace, 36 = six to ace, 52 = two to ace.
@@ -225,13 +230,30 @@ pub struct GameConfig {
     pub num_players: usize,
     /// Defender may redirect an attack by showing the trump of the same rank.
     pub trump_reflecting: bool,
+    /// Until cards have been discarded for the first time, a trick may hold at
+    /// most five attack cards instead of six (common in online Durak apps).
+    /// Absent in older saves, which therefore keep the six-card limit.
+    #[serde(default)]
+    pub first_trick_limit: bool,
+    /// No draws: when the last defender beats the final attack with their last
+    /// card, the attacker who played that card is the durak instead of the game
+    /// being drawn. Absent in older saves, which therefore keep draws.
+    #[serde(default)]
+    pub classic_ending: bool,
     /// Defender may redirect an attack by playing a card of the same rank.
     pub reflecting: bool,
 }
 
 impl Default for GameConfig {
     fn default() -> Self {
-        Self { deck_size: 36, num_players: 2, trump_reflecting: false, reflecting: false }
+        Self {
+            deck_size: 36,
+            num_players: 2,
+            trump_reflecting: false,
+            reflecting: false,
+            first_trick_limit: false,
+            classic_ending: false,
+        }
     }
 }
 
@@ -328,7 +350,7 @@ pub enum Outcome {
     InProgress,
     /// The named player is left holding cards.
     Durak { player: PlayerId },
-    /// Everybody got rid of their cards.
+    /// Everybody got rid of their cards (only without the classic ending).
     Draw,
 }
 
@@ -690,8 +712,8 @@ impl GameState {
                 _ => return invalid_state("the bottom stock card must be the known trump card"),
             }
         }
-        if self.table.len() > MAX_PILES {
-            return invalid_state(format!("more than {MAX_PILES} piles on the table"));
+        if self.table.len() > self.pile_limit() {
+            return invalid_state(format!("more than {} piles on the table", self.pile_limit()));
         }
         for card in &self.reflected_trumps {
             match card.id() {
@@ -799,6 +821,9 @@ impl GameState {
         }
         match self.players_with_cards().as_slice() {
             [player] => Outcome::Durak { player: *player },
+            // Everyone ran out together: the final attack was beaten with the
+            // defender's last card, and the attacker who played it is out too.
+            _ if self.config.classic_ending => Outcome::Durak { player: self.last_played_attacker },
             _ => Outcome::Draw,
         }
     }
@@ -845,6 +870,15 @@ impl GameState {
         self.table.iter().position(|p| p.defense.is_none())
     }
 
+    /// Most attack cards this trick may hold.
+    pub fn pile_limit(&self) -> usize {
+        if self.config.first_trick_limit && self.discard.is_empty() {
+            FIRST_TRICK_PILES
+        } else {
+            MAX_PILES
+        }
+    }
+
     fn undefended_pile_count(&self) -> usize {
         self.table.iter().filter(|p| p.defense.is_none()).count()
     }
@@ -852,7 +886,7 @@ impl GameState {
     /// Room for one more attack card: under the pile limit and within what the
     /// defender could still answer.
     fn can_add_pile(&self) -> bool {
-        self.table.len() < MAX_PILES
+        self.table.len() < self.pile_limit()
             && self.undefended_pile_count() < self.hand_size(self.defender)
     }
 
@@ -912,7 +946,7 @@ impl GameState {
         self.config.reflecting
             && card.rank() == attack.rank()
             && self.table.iter().all(|p| p.defense.is_none())
-            && self.table.len() < MAX_PILES
+            && self.table.len() < self.pile_limit()
             && self
                 .reflect_target()
                 .is_some_and(|t| self.hand_size(t) >= self.table.len() + 1)
