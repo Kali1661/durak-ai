@@ -8,6 +8,7 @@
   import ModeTile from './components/ModeTile.svelte'
   import PillChoice from './components/PillChoice.svelte'
   import ThinkTime from './components/ThinkTime.svelte'
+  import GamesPanel from './components/GamesPanel.svelte'
   import { cardLabel, suitSymbol } from './lib/cards.js'
   import {
     AI_TYPES, DECK_SIZES, LIMITS, PLAYER_COUNTS, PlayerType,
@@ -20,6 +21,7 @@
   } from './lib/game.js'
   import { actionKey, addResult, createTally, pickBest, summarize } from './lib/aggregate.js'
   import { SolverPool, friendlySolverError } from './lib/solver-pool.js'
+  import { addStep, finalize, hintSnapshot, isRecording, newRecording, saveReplay, truncate } from './lib/replays.js'
   import initWasm, * as engine from './wasm/durak_wasm.js'
 
   // ───────────────────────────────────────────────────────────────────────
@@ -67,8 +69,13 @@
   /** Real-game setup: trump card, my six cards, who attacks first. */
   let setup = { trump: null, hand: [], starter: ME }
 
+  /** Recording of the game in progress (see lib/replays.js), or null. */
+  let rec = null
+
   let settingsDialog
   let newGameDialog
+  let gamesDialog
+  let gamesPanel
   let confirmReset = false
 
   // ───────────────────────────────────────────────────────────────────────
@@ -172,7 +179,7 @@
 
   function saveGame() {
     try {
-      const data = { v: 3, gs, history, log }
+      const data = { v: 3, gs, history, log, rec }
       if (!isPlay()) data.setup = setup
       localStorage.setItem(STORE[modeKey()], JSON.stringify(data))
     } catch (e) {
@@ -197,6 +204,7 @@
     gs = null
     history = []
     log = []
+    rec = null
     setup = cleanSetup(null)
     let discarded = false
 
@@ -222,6 +230,7 @@
             history = ok ? snaps.slice(-MAX_HISTORY) : []
             log = Array.isArray(data.log) ? data.log.filter(l => typeof l === 'string').slice(-MAX_LOG) : []
             if (!ok) discarded = true
+            rec = isRecording(data.rec) ? data.rec : null
           } else {
             discarded = true
           }
@@ -282,15 +291,31 @@
     }
   }
 
-  /** Make `next` the current position. */
-  function commit(next, { snapshot = false, line = '' } = {}) {
+  /**
+   * Make `next` the current position. `step` describes the move that led to it
+   * ({ actor, action, hint }) and adds it to the recording of the game.
+   */
+  function commit(next, { snapshot = false, line = '', step = null } = {}) {
     cancelPending()
-    if (snapshot && gs) history = [...history.slice(-(MAX_HISTORY - 1)), { gs, log }]
+    if (snapshot && gs) history = [...history.slice(-(MAX_HISTORY - 1)), { gs, log, rec: rec ? rec.steps.length : undefined }]
     gs = next
     if (line) log = [...log.slice(-(MAX_LOG - 1)), line]
+    if (rec && step) rec = addStep(rec, { state: next, line, ...step })
     refresh()
     saveGame()
+    if (outcome.status !== 'in_progress') storeRecording()
     schedule(advance, 0)
+  }
+
+  /** Put the recording of this game into the Games list (replacing an earlier save of it). */
+  function storeRecording() {
+    if (!rec || !rec.steps.length) return
+    saveReplay(finalize(rec, outcome)).catch(e => console.warn('Could not save the game recording.', e))
+  }
+
+  function openGames() {
+    gamesDialog?.showModal()
+    gamesPanel?.refresh()
   }
 
   /** In a real game, fill in cards that can only be in one place. */
@@ -315,7 +340,12 @@
       return false
     }
     if (!isPlay()) next = deduce(next)
-    commit(next, { snapshot, line: actionLogText(action, who) + suffix })
+    const actor = actorOf(gs)
+    // For my own moves, remember what the search was saying when I chose.
+    const advice = actor === ME && settings.showHints
+      ? hintSnapshot(hint.summary, pickBest(hint.summary)?.key, actionKey(action), actionText)
+      : null
+    commit(next, { snapshot, line: actionLogText(action, who) + suffix, step: { actor, action, hint: advice } })
     return true
   }
 
@@ -537,7 +567,7 @@
       return
     }
     notice = null
-    commit(next, { snapshot: true, line: `You drew ${cardLabel(card)}` })
+    commit(next, { snapshot: true, line: `You drew ${cardLabel(card)}`, step: { actor: ME } })
   }
 
   function undo() {
@@ -547,6 +577,7 @@
     history = history.slice(0, -1)
     gs = previous.gs
     log = previous.log
+    if (rec) rec = truncate(rec, previous.rec)
     notice = null
     refresh()
     saveGame()
@@ -576,6 +607,12 @@
     notice = null
     history = []
     log = []
+    rec = newRecording({
+      mode: modeKey(),
+      names: Object.fromEntries(seatIds().map(p => [p, nameOf(p)])),
+      playerTypes: isPlay() ? Object.fromEntries(seatIds().filter(p => p !== ME).map(p => [p, settings.playerTypes[p]])) : null,
+      initial: next,
+    })
     const first = nameOf(actorOf(next))
     commit(next, { line: `New game. ${first === 'You' ? 'You attack' : `${first} attacks`} first.` })
   }
@@ -583,8 +620,11 @@
   /** Leave the current game and go back to the setup screen. */
   function abandonGame() {
     newGameDialog?.close()
+    // A game left before the end is still kept, marked as unfinished.
+    if (gs && outcome.status === 'in_progress') storeRecording()
     cancelPending()
     gs = null
+    rec = null
     history = []
     log = []
     notice = null
@@ -708,6 +748,9 @@
       </div>
 
       <div class="ml-auto flex items-center gap-2">
+        <button type="button" class="btn btn-sm" on:click={openGames}>
+          <span aria-hidden="true">▤</span> Games
+        </button>
         <button type="button" class="btn btn-sm" on:click={() => { confirmReset = false; settingsDialog?.showModal() }}>
           <span aria-hidden="true">⚙</span> Settings
         </button>
@@ -770,7 +813,7 @@
                 on:change={e => update({ reflecting: e.detail, trumpReflecting: e.detail && settings.trumpReflecting })} />
               <ModeTile label="End of the game" value={settings.classicEnding}
                 options={[
-                  { value: true, title: 'classic', icon: 'classic', hint: 'No draws: if the last two players run out together, the attacker loses' },
+                  { value: true, title: 'classic', icon: 'classic', hint: 'No draws: if the last two players run out together, the defender loses' },
                   { value: false, title: 'draw', icon: 'draw', hint: 'If the last two players run out together, the game is a draw' },
                 ]}
                 on:change={e => update({ classicEnding: e.detail })} />
@@ -782,7 +825,7 @@
                   : 'the defender must beat the cards or take them; others may throw in cards of ranks already on the table.'}</li>
               <li><strong class="text-ink">{settings.classicEnding ? 'classic' : 'draw'}:</strong>
                 {settings.classicEnding
-                  ? 'no draws - if the defender beats the final attack with their last card, the attacker who played it loses.'
+                  ? 'no draws - if the defender beats the final attack with their last card, the defender still loses: the attacker got out first.'
                   : 'if the defender beats the final attack with their last card, the game is a draw.'}</li>
             </ul>
           </div>
@@ -1108,6 +1151,17 @@
   </div>
 </dialog>
 
+<dialog class="sheet sheet-wide" bind:this={gamesDialog} aria-labelledby="gm-title">
+  <div class="p-5">
+    <div class="flex items-center justify-between gap-3">
+      <h2 id="gm-title" class="panel-title text-xl">My games</h2>
+      <button type="button" class="btn btn-sm" on:click={() => gamesDialog.close()}>Close</button>
+    </div>
+    <p class="mt-1 text-xs text-muted">Every game is recorded automatically and kept in this browser only. If the app got a result wrong, set the real one - the statistics use it.</p>
+    <GamesPanel bind:this={gamesPanel} />
+  </div>
+</dialog>
+
 <dialog class="sheet" bind:this={settingsDialog} aria-labelledby="st-title">
   <div class="p-5">
     <div class="flex items-center justify-between gap-3">
@@ -1151,15 +1205,15 @@
 
     <div class="mt-5 border-t border-line pt-4">
       <h3 class="text-sm font-bold">Saved data</h3>
-      <p class="mt-1 text-xs text-muted">Games and settings are stored only in this browser.</p>
+      <p class="mt-1 text-xs text-muted">Games and settings are stored only in this browser. Erasing here removes the game in progress and your settings; recorded games stay in Games, where they can be deleted separately.</p>
       {#if confirmReset}
         <div class="mt-2 flex flex-wrap items-center gap-2" role="alert">
-          <span class="text-sm">Erase all saved games and settings?</span>
+          <span class="text-sm">Erase the games in progress and all settings?</span>
           <button type="button" class="btn btn-sm btn-danger" on:click={resetEverything}>Yes, erase everything</button>
           <button type="button" class="btn btn-sm" on:click={() => (confirmReset = false)}>Cancel</button>
         </div>
       {:else}
-        <button type="button" class="btn btn-sm btn-danger mt-2" on:click={() => (confirmReset = true)}>Erase saved games and settings…</button>
+        <button type="button" class="btn btn-sm btn-danger mt-2" on:click={() => (confirmReset = true)}>Erase games in progress and settings…</button>
       {/if}
     </div>
   </div>

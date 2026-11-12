@@ -17,7 +17,7 @@
 //! * The game ends when the stock is empty and at most one player holds cards.
 //!   That player is the durak. If nobody holds cards - the last defender beat
 //!   the final attack with their last card - the game is a draw, or with the
-//!   *classic ending* the attacker who played that final card is the durak.
+//!   *classic ending* that defender is the durak: the attackers got out first.
 //!
 //! Every public entry point validates its input and returns an error instead of
 //! panicking. [`GameState::legal_actions`] and [`GameState::apply`] agree
@@ -236,8 +236,8 @@ pub struct GameConfig {
     #[serde(default)]
     pub first_trick_limit: bool,
     /// No draws: when the last defender beats the final attack with their last
-    /// card, the attacker who played that card is the durak instead of the game
-    /// being drawn. Absent in older saves, which therefore keep draws.
+    /// card, they are the durak instead of the game being drawn - the attackers
+    /// ran out of cards before them. Absent in older saves, which keep draws.
     #[serde(default)]
     pub classic_ending: bool,
     /// Defender may redirect an attack by playing a card of the same rank.
@@ -821,9 +821,10 @@ impl GameState {
         }
         match self.players_with_cards().as_slice() {
             [player] => Outcome::Durak { player: *player },
-            // Everyone ran out together: the final attack was beaten with the
-            // defender's last card, and the attacker who played it is out too.
-            _ if self.config.classic_ending => Outcome::Durak { player: self.last_played_attacker },
+            // Everyone ran out in the same trick: the final attack was beaten
+            // with the defender's last card. The attackers were out first, so
+            // with the classic ending the defender - last to play - is the durak.
+            _ if self.config.classic_ending => Outcome::Durak { player: self.defender },
             _ => Outcome::Draw,
         }
     }

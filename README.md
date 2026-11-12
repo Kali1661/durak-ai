@@ -26,6 +26,19 @@ In both modes you can undo, games are saved in the browser and restored when
 you come back, and the app works on phones, tablets and desktops in light or
 dark theme.
 
+**Games** (top right) keeps a recording of every game you play or track:
+
+- statistics - win rate, wins, losses and draws, how often you followed the
+  suggestions, and breakdowns by mode and by table;
+- a replay of any game, one move at a time, showing what the search suggested
+  before each of your moves and whether you played it;
+- a way to set the real result when the app got it wrong, which the statistics
+  then use;
+- an export of all recordings as one JSON file.
+
+Recordings stay in this browser only. You choose how long suggestions search
+for - 1, 2, 5 or 10 seconds, a custom time, or unlimited until you stop it.
+
 ## Rules implemented
 
 - 2 or 3 players; decks of 24 (nine to ace), 36 (six to ace) or 52 cards;
@@ -48,8 +61,8 @@ Chosen when you start a game, with buttons modelled on the Durak Online app:
   attack goes back to the original attacker.
 - **classic / draw** - what happens when the last defender beats the final
   attack with their last card, so the last two players run out together.
-  *Draw*: the game is a draw. *Classic*: there are no draws, and the attacker
-  who played that final card is the durak.
+  *Draw*: the game is a draw. *Classic*: there are no draws, and that defender
+  is the durak, because the attacker ran out of cards first.
 - **Five cards before the first discard** (on by default) - until cards have
   been discarded for the first time, a trick holds at most five attack cards.
 - **Pass by showing a trump** (off by default) - with passing on, the defender
@@ -75,6 +88,8 @@ Treat the score as a way to compare moves, not as an exact probability. It
 depends on random deals and largely random play-outs, it varies from run to
 run, and the search can be wrong. The number of simulations behind each score
 is shown so you can judge how settled it is, and "Search longer" adds more.
+This also holds at the end of a game when every card is known: the score there
+is still an estimate from simulations, not an exact calculation.
 
 ## Running it
 

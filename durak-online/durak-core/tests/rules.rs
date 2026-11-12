@@ -561,12 +561,14 @@ fn last_cards(classic: bool) -> GameState {
 }
 
 #[test]
-fn classic_ending_makes_the_last_attacker_the_durak_instead_of_a_draw() {
+fn classic_ending_makes_the_last_defender_the_durak_instead_of_a_draw() {
+    // The attacker played their last card and is out first; the defender who
+    // beats it with their own last card was the last one holding cards.
     let mut s = last_cards(true);
     assert_eq!(s.outcome(), Outcome::InProgress, "the defender still has to answer");
     play(&mut s, &[defend(c(Clubs, Ace))]);
-    assert_eq!(s.outcome(), Outcome::Durak { player: P0 });
-    assert_eq!(s.durak(), Some(P0));
+    assert_eq!(s.outcome(), Outcome::Durak { player: P1 });
+    assert_eq!(s.durak(), Some(P1));
     assert!(s.legal_actions().is_empty());
 
     let mut d = last_cards(false);
@@ -582,9 +584,9 @@ fn classic_ending_changes_nothing_when_the_defender_takes() {
 }
 
 #[test]
-fn classic_ending_blames_the_player_who_reflected_with_their_last_card() {
-    // P1 passes the attack back with their last card; P0 beats both sevens and
-    // empties their hand at the same moment.
+fn classic_ending_blames_the_defender_after_a_reflect_with_the_last_card() {
+    // P1 passes the attack back with their last card and is out; P0 beats both
+    // sevens with their last cards and, as the final defender, is the durak.
     let mut pos = Pos::new(vec![
         vec![c(Clubs, Seven), c(Clubs, Ace), c(Diamonds, Ace)],
         vec![c(Diamonds, Seven)],
@@ -597,29 +599,28 @@ fn classic_ending_blames_the_player_who_reflected_with_their_last_card() {
     play(&mut s, &[Action::Reflect { card: c(Diamonds, Seven) }]);
     assert_eq!((s.attacker, s.defender), (P1, P0));
     play(&mut s, &[defend_at(0, c(Clubs, Ace)), defend_at(1, c(Diamonds, Ace))]);
-    assert_eq!(s.outcome(), Outcome::Durak { player: P1 });
+    assert_eq!(s.outcome(), Outcome::Durak { player: P0 });
 }
 
 #[test]
 fn the_search_follows_the_chosen_ending() {
-    // Draw rules: beating the last card is worth 1 to the defender, so is the
-    // classic ending. For the attacker the classic ending turns it into a loss.
+    // Draw rules: beating the last card saves the defender (a draw, worth 1).
+    // Classic: the defender is lost whether they beat it or take it.
     let p = SolveParams { determinizations: 1, rollouts: 500, ..SolveParams::default() };
-    for classic in [false, true] {
+    for (classic, expected) in [(false, 1.0), (true, 0.0)] {
         let s = last_cards(classic);
         let r = solve(&s, p, 1).unwrap();
         let beat = r.actions.iter().find(|e| matches!(e.action, Action::Defend { .. })).unwrap();
-        assert_eq!(beat.score, 1.0, "classic = {classic}");
+        assert_eq!(beat.score, expected, "classic = {classic}");
+        let take = r.actions.iter().find(|e| matches!(e.action, Action::Take)).unwrap();
+        assert_eq!(take.score, 0.0, "classic = {classic}");
     }
-    // From the attacker's seat one move earlier: with draws the king leads to a
-    // draw at worst (worth 1); classic makes it a loss once the ace is played.
-    let attacker_view = |classic: bool| {
+    // From the attacker's seat one move earlier, playing the last card is never
+    // a loss under either ending.
+    for classic in [false, true] {
         let mut pos = Pos::new(vec![vec![c(Clubs, King)], vec![c(Clubs, Ace)]]);
         pos.classic_ending = classic;
         let s = pos.build();
-        solve(&s, p, 2).unwrap().actions[0].score
-    };
-    assert_eq!(attacker_view(false), 1.0);
-    // The score averages playouts, so the few early tries of "take" leave a trace.
-    assert!(attacker_view(true) < 0.1, "classic: {}", attacker_view(true));
+        assert_eq!(solve(&s, p, 2).unwrap().actions[0].score, 1.0, "classic = {classic}");
+    }
 }

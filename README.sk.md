@@ -28,6 +28,21 @@ V oboch režimoch môžeš vracať ťahy, hry sa ukladajú v prehliadači a po n
 sa obnovia. Aplikácia funguje na telefóne, tablete aj počítači, vo svetlom aj
 tmavom vzhľade.
 
+Tlačidlo **Games** (vpravo hore) uchováva záznam každej hry, ktorú hráš alebo
+sleduješ:
+
+- štatistiky - úspešnosť, výhry, prehry a remízy, ako často si sa riadil
+  odporúčaniami, a rozdelenie podľa režimu a podľa stola;
+- prehratie ľubovoľnej hry ťah po ťahu aj s tým, čo vyhľadávanie odporúčalo
+  pred každým tvojím ťahom a či si to zahral;
+- možnosť nastaviť skutočný výsledok, keď ho aplikácia určila zle - štatistiky
+  potom počítajú s ním;
+- export všetkých záznamov do jedného súboru JSON.
+
+Záznamy zostávajú iba v tomto prehliadači. Sám si volíš, ako dlho sa
+odporúčania hľadajú - 1, 2, 5 alebo 10 sekúnd, vlastný čas, alebo bez limitu,
+kým hľadanie nezastavíš.
+
 ## Pravidlá
 
 - 2 alebo 3 hráči; balíčky s 24 (od deviatky po eso), 36 (od šestky po eso)
@@ -52,7 +67,7 @@ Pri začatí hry sa vyberá tlačidlami podľa vzoru aplikácie Durak Online:
 - **classic / draw** (klasika / remíza) - čo sa stane, keď posledný obranca
   pobije posledný útok svojou poslednou kartou a poslední dvaja hráči sa kariet
   zbavia naraz. *Draw*: hra končí remízou. *Classic*: remízy nie sú a durakom je
-  útočník, ktorý túto poslednú kartu zahral.
+  tento obranca, lebo útočník sa kariet zbavil skôr.
 - **Päť kariet pred prvým odhodením** (predvolene zapnuté) - kým sa prvýkrát
   neodhodia karty, kolo môže mať najviac päť útočných kariet.
 - **Prekladanie ukázaním tromfu** (predvolene vypnuté) - pri zapnutom
@@ -78,6 +93,8 @@ Skóre ber ako spôsob porovnania ťahov, nie ako presnú pravdepodobnosť. Záv
 od náhodných rozdaní a z veľkej časti náhodného dohrávania, medzi behmi sa
 mení a vyhľadávanie sa môže mýliť. Pri každom skóre je uvedený počet simulácií,
 aby si vedel posúdiť, nakoľko je ustálené; tlačidlo „Search longer" ich pridá.
+Platí to aj na konci hry, keď sú všetky karty známe: skóre je tam stále odhad
+zo simulácií, nie presný výpočet.
 
 ## Spustenie
 

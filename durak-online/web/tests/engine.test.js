@@ -171,3 +171,35 @@ test('a real-game position can be entered, searched and updated with drawn cards
   assert.ok(state.hands[0].every(c => c.type !== 'unknown'))
   wasm.validate_state(state)
 })
+
+test('classic ending: the defender who beats the last card with their last card is the durak', () => {
+  // Both players down to one card, stock empty: the attacker leads the king, the defender holds the ace.
+  const lastCards = classic => {
+    const s = newGame(1, { deck_size: 24, classic_ending: classic })
+    const pub = c => ({ ...c, type: 'public' })
+    const all = [...s.hands.flat(), ...s.stock].map(pub)
+    const king = all.find(c => c.suit === 'Clubs' && c.rank === 'King')
+    const ace = all.find(c => c.suit === 'Clubs' && c.rank === 'Ace')
+    const position = {
+      ...s,
+      attacker: 'P1', defender: 'P0', attackers: ['P1'], current_attacker_idx: 0, last_played_attacker: 'P1',
+      phase: 'Attacking', table: [], stock: [],
+      hands: [[ace], [king]],
+      discard: all.filter(c => c !== king && c !== ace),
+    }
+    wasm.validate_state(position)
+    return wasm.apply_action(position, { type: 'attack', card: king })
+  }
+
+  const classic = lastCards(true)
+  assert.equal(wasm.game_outcome(classic).status, 'in_progress')
+  const beat = wasm.legal_actions(classic).find(a => a.type === 'defend')
+  assert.deepEqual(wasm.game_outcome(wasm.apply_action(classic, beat)), { status: 'durak', player: 'P0' })
+  // The search must not call that a win for the defender.
+  const { summary } = chooseMove(classic)
+  for (const a of summary.actions) assert.equal(a.score, 0, `${a.key} loses under the classic ending`)
+
+  const draw = lastCards(false)
+  const beatDraw = wasm.legal_actions(draw).find(a => a.type === 'defend')
+  assert.equal(wasm.game_outcome(wasm.apply_action(draw, beatDraw)).status, 'draw')
+})

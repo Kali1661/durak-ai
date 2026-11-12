@@ -35,7 +35,7 @@ fn check_finished(s: &GameState) {
     match s.outcome() {
         Outcome::Durak { player } if holders.is_empty() => {
             assert!(s.config.classic_ending, "everyone out is a draw unless the classic ending is on");
-            assert_eq!(player, s.last_played_attacker, "the classic ending blames the last attacker");
+            assert_eq!(player, s.defender, "the classic ending blames the last defender");
         }
         Outcome::Durak { player } => assert_eq!(holders, vec![player.index()]),
         Outcome::Draw => {

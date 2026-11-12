@@ -175,6 +175,9 @@
   dialog.sheet {
     @apply w-[min(34rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-0 text-ink shadow-2xl;
   }
+  dialog.sheet.sheet-wide {
+    @apply w-[min(64rem,calc(100vw-2rem))];
+  }
   dialog.sheet::backdrop {
     background: rgb(0 0 0 / 0.55);
   }
