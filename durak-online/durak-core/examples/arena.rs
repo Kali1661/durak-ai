@@ -17,7 +17,7 @@
 //! `positions` shows what both kinds of search suggest in recorded positions
 //! (see `examples/data/positions.txt`).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use durak_core::{
@@ -137,6 +137,9 @@ fn run_match(args: &[String]) {
     // One job per (deal, seat for A).
     let jobs: Vec<(u64, usize)> = (0..deals as u64).flat_map(|d| (0..players).map(move |seat| (d, seat))).collect();
     let next = AtomicUsize::new(0);
+    // Running tally: games where A was the durak, and games finished.
+    let lost = AtomicU32::new(0);
+    let played = AtomicU32::new(0);
     let started = Instant::now();
     let results: Vec<(u64, usize, Outcome)> = std::thread::scope(|scope| {
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -149,9 +152,18 @@ fn run_match(args: &[String]) {
                         let Some(&(deal, seat)) = jobs.get(i) else { break };
                         let mut seats = vec![b; players];
                         seats[seat] = a;
-                        out.push((deal, seat, play(1000 + deal, config, &seats, effort)));
-                        if (i + 1) % 20 == 0 {
-                            eprintln!("  {} / {} games, {:.0} s", i + 1, jobs.len(), started.elapsed().as_secs_f64());
+                        let o = play(1000 + deal, config, &seats, effort);
+                        let a_lost = matches!(o, Outcome::Durak { player } if player.index() == seat);
+                        let l = lost.fetch_add(u32::from(a_lost), Ordering::Relaxed) + u32::from(a_lost);
+                        let n = played.fetch_add(1, Ordering::Relaxed) + 1;
+                        out.push((deal, seat, o));
+                        if n % 20 == 0 {
+                            eprintln!(
+                                "  {n} / {} games, A the durak so far {:.1}%, {:.0} s",
+                                jobs.len(),
+                                100.0 * f64::from(l) / f64::from(n),
+                                started.elapsed().as_secs_f64()
+                            );
                         }
                     }
                     out
