@@ -47,7 +47,12 @@ kým hľadanie nezastavíš.
 
 - 2 alebo 3 hráči; balíčky s 24 (od deviatky po eso), 36 (od šestky po eso)
   alebo 52 kartami; v ruke šesť kariet.
-- Útočí sa po jednej karte; obranca odpovie skôr, než príde ďalšia.
+- **Karty na jeden útok** (volí sa pri začatí; 1, 2 alebo ľubovoľne): koľko
+  kariet môže útočník vyložiť - prvú a potom ďalšie s hodnotou, ktorá už je na
+  stole, napríklad dvojicu es - skôr, než obranca odpovie. Pri *Any* môžu ísť
+  na stôl naraz všetky štyri deviatky. Pri zadávaní súperovho útoku v skutočnej
+  hre zadaj každú kartu: aplikácia predpokladá, že už nič nepridal, a ak áno,
+  stlač *They added more cards*.
 - Najviac šesť útočných kariet v jednom kole a nikdy viac nepobitých kariet,
   než má obranca v ruke.
 - Prihadzovanie: každý útočník môže pridať karty, ktorých hodnota už je na
@@ -78,8 +83,8 @@ Ak chceš zrkadliť hru z Durak Online, vyber rovnaký počet hráčov, balíče
 *throw-in* alebo *passing* a *classic* alebo *draw* ako v aplikácii, nechaj
 pravidlo piatich kariet zapnuté a pravidlo tromfu vypnuté. V aplikácii zvoľ
 *fair play*; *neighbors* a *all* sa pri dvoch či troch hráčoch správajú rovnako.
-Jeden rozdiel zostáva: v aplikácii môže útočník vyložiť naraz viac kariet rovnakej
-hodnoty, tu sa zadávajú po jednej.
+Karty na jeden útok nastav na *Any*: v tej aplikácii môže útočník vyložiť naraz
+viac kariet.
 
 ## O odporúčaniach
 

@@ -102,6 +102,7 @@ export function actionText(action) {
   if (card) return `${VERBS[action.type] || action.type} ${cardLabel(card)}`
   if (action?.type === 'take') return 'Take the cards'
   if (action?.type === 'pass_attack') return 'Pass'
+  if (action?.type === 'let_defend') return 'Let them defend'
   if (action?.type === 'throw') return 'Done throwing in'
   return 'Unknown action'
 }
@@ -117,6 +118,7 @@ export function actionLogText(action, who) {
     case 'reflect_trump': return `${who} showed ${label} to reflect`
     case 'take': return `${who} took the cards`
     case 'pass_attack': return `${who} passed`
+    case 'let_defend': return `${who} added no more cards`
     case 'throw': return card ? `${who} threw in ${label}` : `${who} finished throwing in`
     default: return `${who} moved`
   }
@@ -139,6 +141,9 @@ export function promptFor(state) {
   if (!state) return { you: '', other: '' }
   if (state.phase === 'Defending') {
     return { you: 'beat the attacking card, or take the cards', other: 'must beat the attack or take the cards' }
+  }
+  if (state.phase === 'Adding') {
+    return { you: 'add more cards of a rank on the table, or let them defend', other: 'may add more cards before the defence' }
   }
   if (state.phase === 'Throwing') {
     return { you: 'throw in more cards, or finish', other: 'may throw in more cards' }

@@ -23,8 +23,11 @@ fn two_player_configs() -> Vec<GameConfig> {
     for (reflecting, trump_reflecting) in [(false, false), (true, false), (false, true), (true, true)] {
         for classic_ending in [false, true] {
             for first_trick_limit in [false, true] {
+                // Cover each attack size without multiplying the run time.
+                let cards_per_attack = [1, 2, 6][(out.len()) % 3];
                 out.push(GameConfig {
                     deck_size: 24, num_players: 2, reflecting, trump_reflecting, first_trick_limit, classic_ending,
+                    cards_per_attack,
                 });
             }
         }
@@ -33,7 +36,7 @@ fn two_player_configs() -> Vec<GameConfig> {
 }
 
 /// Positions from random real games, taken once the solver applies and at most
-/// `max_cards` cards are still in the two hands. They come up in every phase:
+/// `max_cards` cards are still in play. They come up in every phase:
 /// mid-trick, after a pass, while throwing in.
 fn endgame_positions(config: GameConfig, seeds: std::ops::Range<u64>, max_cards: usize) -> Vec<GameState> {
     let mut out = vec![];
@@ -44,8 +47,10 @@ fn endgame_positions(config: GameConfig, seeds: std::ops::Range<u64>, max_cards:
             if s.is_terminal() {
                 break;
             }
-            let in_hands = s.hands[0].len() + s.hands[1].len();
-            if is_exactly_solvable(&s) && in_hands <= max_cards {
+            // Every card still in play, including the table the defender may pick up.
+            let in_play = s.hands[0].len() + s.hands[1].len() + s.stock.len()
+                + s.table.iter().map(|p| 1 + usize::from(p.defense.is_some())).sum::<usize>();
+            if is_exactly_solvable(&s) && in_play <= max_cards {
                 out.push(s.clone());
             }
             let acts = s.legal_actions();
@@ -60,7 +65,7 @@ fn the_fast_solver_agrees_with_the_engine_rules() {
     let checked = with_big_stack(|| {
         let mut checked = 0;
         for config in two_player_configs() {
-            for s in endgame_positions(config, 1..14, 6) {
+            for s in endgame_positions(config, 1..14, 8) {
                 let fast = solve_exact(&s, NODES).unwrap().expect("solvable");
                 let slow = solve_exact_reference(&s, NODES).unwrap().expect("solvable");
                 assert!(fast.actions.iter().all(|a| a.value.is_some()), "fast solver ran out of nodes

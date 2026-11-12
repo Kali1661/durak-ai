@@ -18,8 +18,11 @@ fn configs() -> Vec<GameConfig> {
                 for first_trick_limit in [false, true] {
                     // Alternate the ending so both are covered without doubling the run time.
                     let classic_ending = first_trick_limit ^ reflecting;
+                    // Cycle through the attack sizes as well.
+                    let cards_per_attack = [1, 2, 6][out.len() % 3];
                     out.push(GameConfig {
                         deck_size, num_players, reflecting, trump_reflecting, first_trick_limit, classic_ending,
+                        cards_per_attack,
                     });
                 }
             }

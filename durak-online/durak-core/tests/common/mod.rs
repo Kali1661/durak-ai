@@ -31,6 +31,7 @@ pub struct Pos {
     pub deck_size: usize,
     pub first_trick_limit: bool,
     pub classic_ending: bool,
+    pub cards_per_attack: u8,
 }
 
 impl Pos {
@@ -48,6 +49,7 @@ impl Pos {
             deck_size: 36,
             first_trick_limit: false,
             classic_ending: false,
+            cards_per_attack: 1,
         }
     }
 
@@ -92,6 +94,7 @@ impl Pos {
             table: self.table,
             discard,
             reflected_trumps: vec![],
+            batch: 0,
             config: GameConfig {
                 deck_size: self.deck_size,
                 num_players: n,
@@ -99,6 +102,7 @@ impl Pos {
                 reflecting: self.reflecting,
                 first_trick_limit: self.first_trick_limit,
                 classic_ending: self.classic_ending,
+                cards_per_attack: self.cards_per_attack,
             },
         }
     }

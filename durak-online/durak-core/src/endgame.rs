@@ -284,6 +284,7 @@ impl Proof {
 const ATTACKING: u8 = 0;
 const DEFENDING: u8 = 1;
 const THROWING: u8 = 2;
+const ADDING: u8 = 3;
 
 /// A two-player position as sets of cards (bit `suit * 13 + rank - 2`).
 /// The discard pile is whatever is in none of the sets.
@@ -302,6 +303,8 @@ struct Pos {
     stock: u64,
     attacker: u8,
     phase: u8,
+    /// Cards laid down since the defender last answered.
+    batch: u8,
     /// Whether anything has been discarded yet (the first trick is shorter).
     discarded: bool,
 }
@@ -313,6 +316,7 @@ struct Rules {
     trump_reflecting: bool,
     first_trick_limit: bool,
     classic_ending: bool,
+    cards_per_attack: u8,
 }
 
 fn bit(card: &Card) -> u64 {
@@ -353,13 +357,18 @@ impl Pos {
                 Phase::Attacking => ATTACKING,
                 Phase::Defending => DEFENDING,
                 Phase::Throwing => THROWING,
+                Phase::Adding => ADDING,
             },
+            batch: s.batch,
             discarded: !s.discard.is_empty(),
         }
     }
 
     fn fingerprint(&self) -> u128 {
-        let flags = u64::from(self.attacker) | u64::from(self.phase) << 1 | u64::from(self.discarded) << 3;
+        let flags = u64::from(self.attacker)
+            | u64::from(self.phase) << 1
+            | u64::from(self.discarded) << 3
+            | u64::from(self.batch) << 4;
         let mut a = 0x243F_6A88_85A3_08D3u64;
         let mut b = 0x1319_8A2E_0370_7344u64;
         for v in [self.hand[0], self.hand[1], self.atk, self.def, self.open, self.shown, self.stock, flags] {
@@ -392,7 +401,7 @@ impl Pos {
             (p0_holds, _) => {
                 let holder = if p0_holds { 0 } else { 1 };
                 // The last defender may still beat the final attack.
-                if holder == defender && self.phase == DEFENDING {
+                if holder == defender && (self.phase == DEFENDING || self.phase == ADDING) {
                     None
                 } else {
                     Some(if holder == 0 { 0 } else { 2 })
@@ -427,7 +436,23 @@ impl Pos {
         self.def = 0;
         self.open = 0;
         self.shown = 0;
+        self.batch = 0;
         self.phase = ATTACKING;
+    }
+
+    /// Lay down `card` as the attacker; the defender answers next unless more
+    /// may and can be added.
+    fn lay(&self, card: u64, rules: &Rules) -> Pos {
+        let a = self.attacker as usize;
+        let mut p = *self;
+        p.hand[a] ^= card;
+        p.atk |= card;
+        p.open |= card;
+        p.batch = if self.phase == ADDING { self.batch + 1 } else { 1 };
+        // As in the engine: decided by what everyone can see, not by the hand.
+        let more = p.batch < rules.cards_per_attack && p.can_add_pile(rules) && p.hand[a] != 0;
+        p.phase = if more { ADDING } else { DEFENDING };
+        p
     }
 
     /// Every position one move away, each with a rough cost: moves more likely
@@ -439,7 +464,7 @@ impl Pos {
         let cost = |card: u64| card.trailing_zeros() % 13 + if card & trump_cards != 0 { 20 } else { 0 };
 
         match self.phase {
-            ATTACKING => {
+            ATTACKING | ADDING => {
                 let mut playable = if self.atk == 0 {
                     self.hand[a]
                 } else if self.can_add_pile(rules) {
@@ -450,12 +475,15 @@ impl Pos {
                 while playable != 0 {
                     let card = playable & playable.wrapping_neg();
                     playable ^= card;
+                    out.push((100 + cost(card), self.lay(card, rules)));
+                }
+                if self.phase == ADDING {
+                    // Let the defender answer.
                     let mut p = *self;
-                    p.hand[a] ^= card;
-                    p.atk |= card;
-                    p.open |= card;
                     p.phase = DEFENDING;
-                    out.push((100 + cost(card), p));
+                    out.push((150, p));
+                    out.sort_by_key(|(c, _)| *c);
+                    return;
                 }
                 if self.atk != 0 {
                     // Pass: the defence succeeded, the table is discarded.
@@ -502,6 +530,7 @@ impl Pos {
                         p.atk |= card;
                         p.open |= card;
                         p.attacker = d as u8;
+                        p.batch = 0;
                         out.push((cost(card), p));
                     }
                     if rules.trump_reflecting
@@ -512,6 +541,7 @@ impl Pos {
                         let mut p = *self;
                         p.shown |= card;
                         p.attacker = d as u8;
+                        p.batch = 0;
                         out.push((cost(card), p));
                     }
                 }
@@ -756,6 +786,7 @@ impl PositionSearch for FastSearch {
             trump_reflecting: s.config.trump_reflecting,
             first_trick_limit: s.config.first_trick_limit,
             classic_ending: s.config.classic_ending,
+            cards_per_attack: s.config.cards_per_attack,
         };
         let pos = Pos::from_state(s);
         let end = self.nodes + budget;

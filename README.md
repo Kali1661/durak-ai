@@ -43,7 +43,12 @@ for - 1, 2, 5 or 10 seconds, a custom time, or unlimited until you stop it.
 
 - 2 or 3 players; decks of 24 (nine to ace), 36 (six to ace) or 52 cards;
   six-card hands.
-- One attack card at a time; the defender answers before the next one.
+- **Cards per attack** (chosen when you start; 1, 2 or any): how many cards an
+  attacker may lay down - the first one, then more of a rank already on the
+  table, such as a pair of aces - before the defender answers. With *any*, all
+  four nines can go down at once. When entering an opponent's attack in a real
+  game, enter each card: the app assumes they added nothing more, and if they
+  did, press *They added more cards*.
 - At most six attack cards per trick, and never more unanswered cards than the
   defender holds.
 - Throw-in: every attacker may add cards whose rank is already on the table.
@@ -72,9 +77,8 @@ Chosen when you start a game, with buttons modelled on the Durak Online app:
 To mirror a Durak Online game, choose the same players, deck, *throw-in* or
 *passing* and *classic* or *draw* as in the app, keep the five-card rule on and
 the trump rule off. In that app pick *fair play*; *neighbors* and *all* behave
-the same with two or three players. One difference remains: in that app an
-attacker may lay down several cards of one rank at once, while here they are
-entered one at a time.
+the same with two or three players. Set *cards per attack* to *any*: that app
+lets an attacker lay down several cards at once.
 
 ## About the suggestions
 

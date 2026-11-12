@@ -79,7 +79,17 @@ test('game config uses the engine field names', () => {
   const config = settingsToGameConfig(sanitizeSettings({ numPlayers: 3, deckSize: 52, reflecting: true }))
   assert.deepEqual(config, {
     deck_size: 52, num_players: 3, trump_reflecting: false, reflecting: true, first_trick_limit: true, classic_ending: false,
+    cards_per_attack: 6,
   })
+})
+
+test('cards per attack: 1, 2 or any (6); anything else falls back to the default', () => {
+  assert.equal(sanitizeSettings({ cardsPerAttack: 1 }).cardsPerAttack, 1)
+  assert.equal(sanitizeSettings({ cardsPerAttack: 2 }).cardsPerAttack, 2)
+  assert.equal(sanitizeSettings({ cardsPerAttack: 6 }).cardsPerAttack, 6)
+  for (const bad of [0, 3, 7, '2', null]) {
+    assert.equal(sanitizeSettings({ cardsPerAttack: bad }).cardsPerAttack, DEFAULT_SETTINGS.cardsPerAttack)
+  }
 })
 
 test('sanitising is idempotent', () => {

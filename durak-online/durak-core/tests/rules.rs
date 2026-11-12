@@ -624,3 +624,114 @@ fn the_search_follows_the_chosen_ending() {
         assert_eq!(solve(&s, p, 2).unwrap().actions[0].score, 1.0, "classic = {classic}");
     }
 }
+
+// ── Several cards per attack ────────────────────────────────────────────────
+
+fn batch_game(cards_per_attack: u8) -> GameState {
+    let mut pos = Pos::new(vec![
+        vec![c(Clubs, Nine), c(Diamonds, Nine), c(Spades, Nine), c(Hearts, Nine), c(Clubs, King)],
+        vec![c(Clubs, Ace), c(Diamonds, Ace), c(Spades, Ace), c(Hearts, Ten), c(Diamonds, Jack)],
+    ]);
+    pos.cards_per_attack = cards_per_attack;
+    pos.build()
+}
+
+#[test]
+fn one_card_per_attack_means_the_defender_answers_every_card() {
+    let mut s = batch_game(1);
+    play(&mut s, &[attack(c(Clubs, Nine))]);
+    assert_eq!(s.phase, Phase::Defending);
+    assert!(!has(&s, &Action::LetDefend));
+}
+
+#[test]
+fn two_cards_per_attack_allow_a_second_card_before_the_answer() {
+    let mut s = batch_game(2);
+    play(&mut s, &[attack(c(Clubs, Nine))]);
+    assert_eq!(s.phase, Phase::Adding);
+    assert_eq!(s.actor_to_move(), P0, "the attacker is still to move");
+    assert!(has(&s, &Action::LetDefend));
+    assert!(has(&s, &attack(c(Spades, Nine))));
+    assert!(!has(&s, &attack(c(Clubs, King))), "only ranks already on the table");
+    play(&mut s, &[attack(c(Spades, Nine))]);
+    assert_eq!(s.phase, Phase::Defending, "the limit of two is reached");
+    assert_eq!(s.table.len(), 2);
+    // The defender answers both, then the attacker may start a new batch.
+    play(&mut s, &[defend_at(0, c(Clubs, Ace)), defend_at(1, c(Spades, Ace))]);
+    assert_eq!(s.phase, Phase::Attacking);
+    play(&mut s, &[attack(c(Diamonds, Nine))]);
+    assert_eq!(s.phase, Phase::Adding, "a new batch after the defender answered");
+}
+
+#[test]
+fn any_number_of_cards_lays_down_all_four_nines() {
+    let mut s = batch_game(6);
+    play(&mut s, &[attack(c(Clubs, Nine)), attack(c(Diamonds, Nine)), attack(c(Spades, Nine))]);
+    assert_eq!(s.phase, Phase::Adding);
+    play(&mut s, &[attack(c(Hearts, Nine))]);
+    assert_eq!(s.table.len(), 4);
+    assert_eq!(s.batch, 4);
+    // No nine left, but the chance to add is offered all the same: whether the
+    // attacker holds a matching card is not something the others can see.
+    assert_eq!(s.phase, Phase::Adding);
+    assert!(s.legal_actions().iter().all(|a| a.same_move(&Action::LetDefend)));
+    play(&mut s, &[Action::LetDefend]);
+    assert_eq!(s.phase, Phase::Defending);
+}
+
+#[test]
+fn letting_the_defender_answer_ends_the_batch() {
+    let mut s = batch_game(6);
+    play(&mut s, &[attack(c(Clubs, Nine)), Action::LetDefend]);
+    assert_eq!(s.phase, Phase::Defending);
+    assert_eq!(s.actor_to_move(), P1);
+}
+
+#[test]
+fn a_batch_never_holds_more_cards_than_the_defender_can_answer() {
+    let mut pos = Pos::new(vec![
+        vec![c(Clubs, Nine), c(Diamonds, Nine), c(Spades, Nine)],
+        vec![c(Clubs, Ace), c(Diamonds, Ace)],
+    ]);
+    pos.cards_per_attack = 6;
+    let mut s = pos.build();
+    play(&mut s, &[attack(c(Clubs, Nine)), attack(c(Diamonds, Nine))]);
+    assert_eq!(s.phase, Phase::Defending, "two open cards against two cards in hand");
+}
+
+#[test]
+fn a_batch_can_be_passed_on_whole() {
+    // Two nines laid together; the defender passes them on with a third.
+    let mut pos = Pos::new(vec![
+        vec![c(Clubs, Nine), c(Diamonds, Nine), c(Clubs, King), c(Hearts, Ten), c(Spades, King)],
+        vec![c(Spades, Nine), c(Clubs, Ace), c(Diamonds, Ace)],
+    ]);
+    pos.cards_per_attack = 6;
+    pos.reflecting = true;
+    let mut s = pos.build();
+    play(&mut s, &[attack(c(Clubs, Nine)), attack(c(Diamonds, Nine)), Action::LetDefend]);
+    assert_eq!(s.phase, Phase::Defending);
+    play(&mut s, &[Action::Reflect { card: c(Spades, Nine) }]);
+    assert_eq!((s.attacker, s.defender, s.phase), (P1, P0, Phase::Defending));
+    assert_eq!(s.table.len(), 3);
+}
+
+#[test]
+fn games_saved_before_this_rule_keep_one_card_at_a_time() {
+    let mut s = batch_game(2);
+    let mut json = serde_json::to_value(&s).unwrap();
+    json["config"].as_object_mut().unwrap().remove("cards_per_attack");
+    json.as_object_mut().unwrap().remove("batch");
+    s = serde_json::from_value(json).unwrap();
+    assert_eq!(s.config.cards_per_attack, 1);
+    assert_eq!(s.batch, 0);
+    s.validate().unwrap();
+}
+
+#[test]
+fn the_attack_size_must_be_between_one_and_six() {
+    for bad in [0u8, 7] {
+        let config = GameConfig { cards_per_attack: bad, ..GameConfig::default() };
+        assert!(config.validate().is_err(), "{bad}");
+    }
+}

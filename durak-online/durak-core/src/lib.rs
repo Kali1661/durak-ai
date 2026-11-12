@@ -3,7 +3,9 @@
 //! Supported tables: 2 or 3 players, decks of 24, 36 or 52 cards, six-card hands.
 //!
 //! Rule summary (the variant this engine implements):
-//! * One attack card is played at a time; the defender answers before the next.
+//! * An attacker lays down one card, then - up to [`GameConfig::cards_per_attack`]
+//!   cards in all - may add more of a rank already on the table before the
+//!   defender answers. With the limit at 1, the defender answers every card.
 //! * At most [`MAX_PILES`] attack cards per trick (optionally five until the
 //!   first successful defence), and never more undefended
 //!   cards than the defender holds.
@@ -223,6 +225,10 @@ pub enum Phase {
     Attacking,
     /// Defender must beat the open pile, reflect, or take.
     Defending,
+    /// The attacker has just played and may add more cards (of ranks on the
+    /// table) before the defender answers, or let the defender answer now.
+    /// Only with [`GameConfig::cards_per_attack`] above 1.
+    Adding,
     /// Defender is taking; attackers may throw in extra cards.
     Throwing,
 }
@@ -247,6 +253,15 @@ pub struct GameConfig {
     pub classic_ending: bool,
     /// Defender may redirect an attack by playing a card of the same rank.
     pub reflecting: bool,
+    /// How many cards an attacker may lay down before the defender answers:
+    /// 1 (one at a time) up to [`MAX_PILES`] (as many as the table allows).
+    /// Absent in older saves, which therefore keep one card at a time.
+    #[serde(default = "one_card")]
+    pub cards_per_attack: u8,
+}
+
+fn one_card() -> u8 {
+    1
 }
 
 impl Default for GameConfig {
@@ -258,6 +273,7 @@ impl Default for GameConfig {
             reflecting: false,
             first_trick_limit: false,
             classic_ending: false,
+            cards_per_attack: 1,
         }
     }
 }
@@ -274,6 +290,12 @@ impl GameConfig {
             return Err(EngineError::InvalidConfig(format!(
                 "a {}-card deck is not supported; choose one of {:?}",
                 self.deck_size, SUPPORTED_DECK_SIZES
+            )));
+        }
+        if !(1..=MAX_PILES as u8).contains(&self.cards_per_attack) {
+            return Err(EngineError::InvalidConfig(format!(
+                "cards per attack must be between 1 and {MAX_PILES}, got {}",
+                self.cards_per_attack
             )));
         }
         // Every player gets a full hand and at least the trump card stays in the stock.
@@ -316,6 +338,8 @@ pub enum Action {
     Reflect { card: Card },
     /// Defender shows the trump of the same rank; the attack moves on, the card stays in hand.
     ReflectTrump { card: Card },
+    /// The attacker adds no more cards for now; the defender answers.
+    LetDefend,
 }
 
 impl Action {
@@ -327,7 +351,7 @@ impl Action {
             | Action::Reflect { card }
             | Action::ReflectTrump { card } => Some(card),
             Action::Throw { card } => card.as_ref(),
-            Action::PassAttack | Action::Take => None,
+            Action::PassAttack | Action::Take | Action::LetDefend => None,
         }
     }
 
@@ -342,7 +366,10 @@ impl Action {
                 i == j && a.matches(b)
             }
             (Throw { card: Some(a) }, Throw { card: Some(b) }) => a.matches(b),
-            (Throw { card: None }, Throw { card: None }) | (PassAttack, PassAttack) | (Take, Take) => true,
+            (Throw { card: None }, Throw { card: None })
+            | (PassAttack, PassAttack)
+            | (Take, Take)
+            | (LetDefend, LetDefend) => true,
             _ => false,
         }
     }
@@ -400,6 +427,11 @@ pub struct GameState {
     /// Trumps already shown via `ReflectTrump` this trick.
     #[serde(default)]
     pub reflected_trumps: Vec<Card>,
+
+    /// Cards the attacker has laid down since the defender last answered
+    /// (counts towards [`GameConfig::cards_per_attack`]).
+    #[serde(default)]
+    pub batch: u8,
 
     pub config: GameConfig,
 }
@@ -523,6 +555,7 @@ impl GameState {
             table: vec![],
             discard: vec![],
             reflected_trumps: vec![],
+            batch: 0,
             config,
         };
         state.validate()?;
@@ -633,6 +666,7 @@ impl GameState {
             table: vec![],
             discard: vec![],
             reflected_trumps: vec![],
+            batch: 0,
             config,
         };
         state.validate()?;
@@ -763,6 +797,12 @@ impl GameState {
             Phase::Defending if open == 0 => {
                 return invalid_state("defending phase without an undefended pile")
             }
+            Phase::Adding if open == 0 => {
+                return invalid_state("adding phase without an undefended pile")
+            }
+            Phase::Adding if self.batch == 0 || self.batch >= self.config.cards_per_attack => {
+                return invalid_state("adding phase with no cards left to add")
+            }
             Phase::Throwing if self.table.is_empty() => {
                 return invalid_state("throwing phase with an empty table")
             }
@@ -815,7 +855,7 @@ impl GameState {
         let holders = self.players_with_cards();
         match holders.as_slice() {
             [] => true,
-            [last] => !(*last == self.defender && self.phase == Phase::Defending),
+            [last] => !(*last == self.defender && matches!(self.phase, Phase::Defending | Phase::Adding)),
             _ => false,
         }
     }
@@ -845,7 +885,7 @@ impl GameState {
 
     pub fn actor_to_move(&self) -> PlayerId {
         match self.phase {
-            Phase::Attacking | Phase::Throwing => {
+            Phase::Attacking | Phase::Throwing | Phase::Adding => {
                 if self.attackers.is_empty() {
                     self.attacker
                 } else {
@@ -929,6 +969,16 @@ impl GameState {
         known
     }
 
+    /// Cards `pid` could add to the attack right now: a rank already on the
+    /// table, and room for another pile.
+    fn addable_cards(&self, pid: PlayerId) -> Vec<Card> {
+        if self.table.is_empty() || !self.can_add_pile() {
+            return vec![];
+        }
+        let ranks = self.ranks_on_table();
+        self.usable_cards(pid).into_iter().filter(|c| ranks.contains(&c.rank())).collect()
+    }
+
     /// Cards a player could play. A hand with unknown cards could hold any
     /// card that is not accounted for elsewhere.
     fn usable_cards(&self, pid: PlayerId) -> Vec<Card> {
@@ -992,6 +1042,11 @@ impl GameState {
                             .map(|card| Action::Attack { card }),
                     );
                 }
+                acts
+            }
+            Phase::Adding => {
+                let mut acts = vec![Action::LetDefend];
+                acts.extend(self.addable_cards(actor).into_iter().map(|card| Action::Attack { card }));
                 acts
             }
             Phase::Defending => {
@@ -1064,11 +1119,27 @@ impl GameState {
         let actor = self.actor_to_move();
 
         match (self.phase, action) {
-            (Phase::Attacking, Action::Attack { card }) => {
+            (Phase::Attacking | Phase::Adding, Action::Attack { card }) => {
                 let card = *card;
                 self.remove_from_hand(actor, &card)?;
                 self.table.push(Pile { attack: card.as_public(), defense: None });
                 self.last_played_attacker = actor;
+                self.batch = if self.phase == Phase::Adding { self.batch + 1 } else { 1 };
+                // The chance to add more depends only on what everyone can see (the
+                // limit, the room on the table, whether the attacker has cards left),
+                // never on which cards the attacker holds: in a real game the others
+                // cannot know that, so an observer's view must take the same turns.
+                self.phase = if self.batch < self.config.cards_per_attack
+                    && self.can_add_pile()
+                    && self.hand_size(actor) > 0
+                {
+                    Phase::Adding
+                } else {
+                    Phase::Defending
+                };
+                Ok(())
+            }
+            (Phase::Adding, Action::LetDefend) => {
                 self.phase = Phase::Defending;
                 Ok(())
             }
@@ -1180,6 +1251,7 @@ impl GameState {
         self.attackers = self.build_attackers(self.attacker);
         self.current_attacker_idx = 0;
         self.last_played_attacker = self.attacker;
+        self.batch = 0;
         self.phase = Phase::Defending;
     }
 
@@ -1209,6 +1281,7 @@ impl GameState {
         self.current_attacker_idx = 0;
         self.last_played_attacker = main_attacker;
         self.throw_start_idx = 0;
+        self.batch = 0;
         self.phase = Phase::Attacking;
         self.reflected_trumps.clear();
         self.table.clear();

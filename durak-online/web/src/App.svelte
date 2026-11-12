@@ -11,7 +11,7 @@
   import GamesPanel from './components/GamesPanel.svelte'
   import { cardLabel, suitSymbol } from './lib/cards.js'
   import {
-    AI_TYPES, DECK_SIZES, LIMITS, PLAYER_COUNTS, PlayerType,
+    AI_TYPES, ATTACK_SIZES, DECK_SIZES, LIMITS, PLAYER_COUNTS, PlayerType,
     loadSettings, maxThreads, sanitizeSettings, saveSettings, settingsToGameConfig,
   } from './lib/settings.js'
   import {
@@ -71,6 +71,15 @@
   let exactSolver = null
 
   let revealOpponents = false
+  /**
+   * Real game: once an opponent has laid a card they may add more before I
+   * answer. The app assumes they did not, so the search can start at once;
+   * `assumedAt` is the epoch of the position that assumption produced (it
+   * offers "They added more cards"), and `holdAdding` stops the assumption
+   * from being made again right after it was taken back.
+   */
+  let assumedAt = -1
+  let holdAdding = false
   /** Real-game setup: trump card, my six cards, who attacks first. */
   let setup = { trump: null, hand: [], starter: ME }
 
@@ -307,6 +316,7 @@
    */
   function commit(next, { snapshot = false, line = '', step = null } = {}) {
     cancelPending()
+    holdAdding = false
     if (snapshot && gs) history = [...history.slice(-(MAX_HISTORY - 1)), { gs, log, rec: rec ? rec.steps.length : undefined }]
     gs = next
     if (line) log = [...log.slice(-(MAX_LOG - 1)), line]
@@ -383,7 +393,14 @@
       return
     }
 
-    if (!isPlay()) return // a real opponent: wait for their move to be entered
+    if (!isPlay()) {
+      // A real opponent who may still add cards: assume they added none, so
+      // the suggestions can start; "They added more cards" takes it back.
+      if (gs.phase === 'Adding' && !holdAdding) {
+        if (perform({ type: 'let_defend' }, { snapshot: true, suffix: ' (assumed)' })) assumedAt = epoch
+      }
+      return // otherwise wait for their move to be entered
+    }
     if (settings.playerTypes[who] === PlayerType.Random) {
       schedule(playRandomMove, 600)
     } else {
@@ -623,9 +640,18 @@
     log = previous.log
     if (rec) rec = truncate(rec, previous.rec)
     notice = null
+    // Undoing back into "may add more cards" means they did: do not assume again.
+    holdAdding = true
     refresh()
     saveGame()
     schedule(advance, 0)
+  }
+
+  /** The opponent did add more cards: take back the assumption and enter them. */
+  function addedMoreCards() {
+    if (assumedAt !== epoch) return
+    assumedAt = -1
+    undo()
   }
 
   function startGame() {
@@ -875,6 +901,16 @@
             </ul>
           </div>
 
+          <div class="mt-5">
+            <h3 class="field-label">Cards per attack</h3>
+            <PillChoice label="Cards an attacker may lay down before the defender answers" value={settings.cardsPerAttack}
+              options={ATTACK_SIZES.map(x => ({ value: x.value, text: x.label, hint: x.hint }))}
+              on:change={e => update({ cardsPerAttack: e.detail })} />
+            <p class="field-help">{settings.cardsPerAttack === 1
+              ? 'One card at a time: the defender answers each card before the next.'
+              : `The attacker may lay down ${settings.cardsPerAttack === 2 ? 'up to two cards' : 'several cards'} of ranks already on the table before the defender answers - for example a pair of aces at once. Durak Online allows this. When entering an opponent's attack, the app assumes they added nothing more; if they did, press "They added more cards".`}</p>
+          </div>
+
           <fieldset class="mt-5 rounded-xl border border-line p-3">
             <legend class="px-1 text-sm font-semibold">More rules</legend>
             <label class="flex min-h-[44px] cursor-pointer items-start gap-3 py-1">
@@ -1002,6 +1038,14 @@
                 </Seat>
               {/each}
             </div>
+
+            {#if !playMode && assumedAt === epoch && history.length}
+              <div class="notice notice-info" role="status">
+                <span aria-hidden="true">ℹ</span>
+                <p class="m-0 flex-1">Assumed {nameOf(gs.last_played_attacker)} added no more cards.</p>
+                <button type="button" class="btn btn-sm" on:click={addedMoreCards}>＋ They added more cards</button>
+              </div>
+            {/if}
 
             <section class="felt p-4" aria-label="Table">
               <div class="flex flex-wrap items-start gap-4">
@@ -1136,7 +1180,7 @@
                 <p class="mt-1 text-xs text-muted">Only moves that are possible right now are offered.</p>
                 {#if nonCardActions.length}
                   <div class="mt-3 flex flex-wrap gap-2">
-                    {#each nonCardActions as a (actionKey(a))}<button type="button" class="btn" on:click={() => enterOpponentMove(a)}>{actionText(a).replace('Take the cards', 'Took the cards').replace('Pass', 'Passed').replace('Done throwing in', 'Finished throwing in')}</button>{/each}
+                    {#each nonCardActions as a (actionKey(a))}<button type="button" class="btn" on:click={() => enterOpponentMove(a)}>{actionText(a).replace('Take the cards', 'Took the cards').replace('Pass', 'Passed').replace('Done throwing in', 'Finished throwing in').replace('Let them defend', 'Added no more cards')}</button>{/each}
                   </div>
                 {/if}
                 {#each ACTION_GROUPS as group}

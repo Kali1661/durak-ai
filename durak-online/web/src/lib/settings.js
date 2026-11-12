@@ -21,6 +21,13 @@ export const AI_TYPES = [
 
 export const PLAYER_COUNTS = [2, 3]
 
+/** How many cards an attacker may lay down before the defender answers (6 = any). */
+export const ATTACK_SIZES = [
+  { value: 1, label: '1', hint: 'One card at a time; the defender answers each' },
+  { value: 2, label: '2', hint: 'Up to two cards before the defender answers' },
+  { value: 6, label: 'Any', hint: 'As many as fit on the table (all four nines, say)' },
+]
+
 export const DECK_SIZES = [
   { value: 24, label: '24 cards (9 to ace)' },
   { value: 36, label: '36 cards (6 to ace)' },
@@ -52,6 +59,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   firstTrickLimit: true,
   // true = no draws: if the last two players run out together, the last attacker loses.
   classicEnding: false,
+  // Cards laid down before the defender answers; 6 = any number (Durak Online allows several).
+  cardsPerAttack: 6,
   numThreads: Math.max(1, Math.min(8, Math.floor(maxThreads() / 2) || 1)),
   playerNames: Object.freeze({ P1: 'Opponent 1', P2: 'Opponent 2' }),
   playerTypes: Object.freeze({ P1: PlayerType.MCTS, P2: PlayerType.MCTS }),
@@ -102,6 +111,7 @@ export function sanitizeSettings(raw) {
     reflecting: bool(src.reflecting, d.reflecting),
     firstTrickLimit: bool(src.firstTrickLimit, d.firstTrickLimit),
     classicEnding: bool(src.classicEnding, d.classicEnding),
+    cardsPerAttack: ATTACK_SIZES.some(x => x.value === src.cardsPerAttack) ? src.cardsPerAttack : d.cardsPerAttack,
     numThreads: clampInt(src.numThreads, [1, maxThreads()], Math.min(d.numThreads, maxThreads())),
     playerNames: {
       P1: cleanName(legacyName(names.P1), d.playerNames.P1),
@@ -148,5 +158,6 @@ export function settingsToGameConfig(settings) {
     reflecting: settings.reflecting,
     first_trick_limit: settings.firstTrickLimit,
     classic_ending: settings.classicEnding,
+    cards_per_attack: settings.cardsPerAttack,
   }
 }

@@ -31,6 +31,7 @@ fn label(a: &Action) -> String {
         Action::Throw { card: None } => "done".into(),
         Action::PassAttack => "pass".into(),
         Action::Take => "take".into(),
+        Action::LetDefend => "let defend".into(),
     }
 }
 

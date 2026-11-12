@@ -233,3 +233,18 @@ test('exact solver: an endgame with every card known is calculated, a fresh game
   const best = pickBest(withExact(summary, exact))
   assert.equal(best.exact, exact.value)
 })
+
+test('several cards per attack: the attacker is offered to add more or let the defender answer', () => {
+  for (const [size, expectAdding] of [[1, false], [2, true], [6, true]]) {
+    const state = newGame(11, { cards_per_attack: size })
+    const first = wasm.legal_actions(state).find(a => a.type === 'attack')
+    const after = wasm.apply_action(state, first)
+    assert.equal(after.phase === 'Adding', expectAdding, `size ${size}`)
+    if (expectAdding) {
+      assert.equal(actorOf(after), actorOf(state), 'the same attacker is still to move')
+      assert.ok(wasm.legal_actions(after).some(a => a.type === 'let_defend'))
+      const answered = wasm.apply_action(after, { type: 'let_defend' })
+      assert.equal(answered.phase, 'Defending')
+    }
+  }
+})
