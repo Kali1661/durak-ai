@@ -30,7 +30,8 @@ export const DECK_SIZES = [
 /** Inclusive [min, max] for every numeric setting. */
 export const LIMITS = {
   numThreads: [1, 16],
-  mctsThinkingTimeMs: [250, 30000],
+  mctsThinkingTimeMs: [500, 120000],
+  hintThinkingMs: [500, 600000], // 0 (unlimited) is also allowed
   mctsDeterminizations: [1, 200],
   hintDeterminizations: [1, 500],
   hintRollouts: [100, 50000],
@@ -59,6 +60,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   mctsThinkingTimeMs: 2000,
   mctsDeterminizations: 16,
   showHints: true,
+  // How long suggestions search for; 0 = until you stop it or make a move.
+  hintThinkingMs: 5000,
   hintDeterminizations: 24,
   hintRollouts: 2000,
 })
@@ -112,6 +115,7 @@ export function sanitizeSettings(raw) {
     mctsThinkingTimeMs: clampInt(src.mctsThinkingTimeMs, LIMITS.mctsThinkingTimeMs, d.mctsThinkingTimeMs),
     mctsDeterminizations: clampInt(src.mctsDeterminizations, LIMITS.mctsDeterminizations, d.mctsDeterminizations),
     showHints: bool(src.showHints, d.showHints),
+    hintThinkingMs: src.hintThinkingMs === 0 ? 0 : clampInt(src.hintThinkingMs, LIMITS.hintThinkingMs, d.hintThinkingMs),
     hintDeterminizations: clampInt(src.hintDeterminizations, LIMITS.hintDeterminizations, d.hintDeterminizations),
     hintRollouts: clampInt(src.hintRollouts, LIMITS.hintRollouts, d.hintRollouts),
   }

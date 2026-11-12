@@ -7,6 +7,7 @@
   import ThemeToggle from './components/ThemeToggle.svelte'
   import ModeTile from './components/ModeTile.svelte'
   import PillChoice from './components/PillChoice.svelte'
+  import ThinkTime from './components/ThinkTime.svelte'
   import { cardLabel, suitSymbol } from './lib/cards.js'
   import {
     AI_TYPES, DECK_SIZES, LIMITS, PLAYER_COUNTS, PlayerType,
@@ -30,9 +31,6 @@
   const MAX_HISTORY = 60
   const MAX_LOG = 40
   const HAND_SIZE = 6
-  /** Search batches run automatically for hints before waiting to be asked for more. */
-  const HINT_BATCHES = 6
-  const THINK_TIMES = [500, 1000, 2000, 5000, 10000]
   const IN_PROGRESS = { status: 'in_progress' }
 
   // ───────────────────────────────────────────────────────────────────────
@@ -402,11 +400,16 @@
     }
     hint = { status: 'running', summary: summarize(tally, moves), message: '' }
 
-    for (let i = 0; i < HINT_BATCHES; i++) {
+    // Search in passes until the time budget runs out (0 = until stopped). Passes
+    // start small so short budgets are kept, and grow while there is time.
+    const limit = settings.hintThinkingMs
+    const startedAt = performance.now()
+    let rollouts = Math.min(500, settings.hintRollouts)
+    for (;;) {
       const res = await pool.run({
         state,
         determinizations: settings.hintDeterminizations,
-        rollouts: settings.hintRollouts,
+        rollouts,
         timeoutMs: 60000,
       })
       if (stale() || res.cancelled) return
@@ -417,9 +420,26 @@
         return
       }
       hint = { status: 'running', summary, message: problem || '' }
+      if (limit > 0) {
+        const remaining = limit - (performance.now() - startedAt)
+        if (remaining < res.elapsedMs * 0.75) break
+        if (res.elapsedMs < remaining / 3) rollouts = Math.min(settings.hintRollouts, rollouts * 2)
+      } else {
+        rollouts = Math.min(settings.hintRollouts, rollouts * 2)
+      }
     }
     hint = { ...hint, status: 'done' }
   }
+
+  /** Stop the suggestion search and keep what it found so far. */
+  function stopHints() {
+    if (hint.status !== 'running') return
+    hintRun++
+    pool?.cancel()
+    hint = hint.summary?.totalVisits ? { ...hint, status: 'done' } : idleHint()
+  }
+
+  const fmtTime = ms => (ms === 0 ? 'no time limit' : `${ms / 1000} s`)
 
   /** Let a search opponent think for its time budget, then play its best move. */
   async function runAi(player) {
@@ -799,16 +819,20 @@
                 </div>
               {/each}
             </div>
-            {#if playMode && anySearchOpponent}
-              <div class="mt-3 max-w-xs">
-                <label class="field-label" for="think">Thinking time per move</label>
-                <select id="think" class="field" value={settings.mctsThinkingTimeMs} on:change={e => update({ mctsThinkingTimeMs: Number(e.currentTarget.value) })}>
-                  {#each THINK_TIMES as ms}<option value={ms}>{ms / 1000} s{ms === 2000 ? ' (default)' : ''}</option>{/each}
-                  {#if !THINK_TIMES.includes(settings.mctsThinkingTimeMs)}<option value={settings.mctsThinkingTimeMs}>{settings.mctsThinkingTimeMs / 1000} s (custom)</option>{/if}
-                </select>
-                <p class="field-help">Longer thinking searches more and usually plays better.</p>
+            <div class="mt-3 flex flex-wrap gap-x-6 gap-y-3">
+              <div class="w-full max-w-xs">
+                <ThinkTime id="hint-think" label="Suggestion thinking time" allowUnlimited value={settings.hintThinkingMs}
+                  max={LIMITS.hintThinkingMs[1]} on:change={e => update({ hintThinkingMs: e.detail })} />
+                <p class="field-help">How long your move suggestions search. Unlimited keeps searching until you stop it or play.</p>
               </div>
-            {/if}
+              {#if playMode && anySearchOpponent}
+                <div class="w-full max-w-xs">
+                  <ThinkTime id="think" label="Computer thinking time" value={settings.mctsThinkingTimeMs}
+                    min={LIMITS.mctsThinkingTimeMs[0]} max={LIMITS.mctsThinkingTimeMs[1]} on:change={e => update({ mctsThinkingTimeMs: e.detail })} />
+                  <p class="field-help">Per computer move. Longer usually plays better.</p>
+                </div>
+              {/if}
+            </div>
           </div>
 
           {#if !playMode}
@@ -975,7 +999,7 @@
 
                 {#if settings.showHints}
                   <p class="mt-2 flex items-center gap-2 text-xs text-muted" role="status">
-                    {#if hint.status === 'running'}<span class="spinner" aria-hidden="true"></span> Searching… {hint.summary?.totalVisits ? `${hint.summary.totalVisits.toLocaleString('en')} playouts so far` : ''}
+                    {#if hint.status === 'running'}<span class="spinner" aria-hidden="true"></span> Searching ({fmtTime(settings.hintThinkingMs)})… {hint.summary?.totalVisits ? `${hint.summary.totalVisits.toLocaleString('en')} playouts so far` : ''}
                     {:else if hint.status === 'done'}Search finished: {hint.summary.totalVisits.toLocaleString('en')} playouts over {hint.summary.determinizations.toLocaleString('en')} possible deals.
                     {:else if hint.status === 'error'}Suggestions are unavailable for this move.
                     {:else}Waiting to search.{/if}
@@ -992,7 +1016,9 @@
                 </ul>
 
                 {#if settings.showHints}
-                  {#if hint.status === 'done' || hint.status === 'error'}
+                  {#if hint.status === 'running'}
+                    <button type="button" class="btn btn-sm mt-3" on:click={stopHints}>Stop searching</button>
+                  {:else if hint.status === 'done' || hint.status === 'error'}
                     <button type="button" class="btn btn-sm mt-3" on:click={() => startHints(hint.status === 'done')}>{hint.status === 'done' ? 'Search longer' : 'Try again'}</button>
                   {/if}
                   <details class="mt-3 text-xs text-muted">
@@ -1097,9 +1123,14 @@
         <p class="field-help">1 to {maxThreads()} on this device. More is faster but uses more memory.</p>
       </div>
       <div>
-        <label class="field-label" for="s-time">Computer thinking time (ms)</label>
-        <input id="s-time" class="field" type="number" inputmode="numeric" min={LIMITS.mctsThinkingTimeMs[0]} max={LIMITS.mctsThinkingTimeMs[1]} step="250" value={settings.mctsThinkingTimeMs} on:change={updateNumber('mctsThinkingTimeMs', false)} />
-        <p class="field-help">{LIMITS.mctsThinkingTimeMs[0]} to {LIMITS.mctsThinkingTimeMs[1].toLocaleString('en')}. Used from the next computer move.</p>
+        <ThinkTime id="s-hint-time" label="Suggestion thinking time" allowUnlimited value={settings.hintThinkingMs}
+          max={LIMITS.hintThinkingMs[1]} on:change={e => update({ hintThinkingMs: e.detail })} />
+        <p class="field-help">Used from the next search.</p>
+      </div>
+      <div>
+        <ThinkTime id="s-time" label="Computer thinking time" value={settings.mctsThinkingTimeMs}
+          min={LIMITS.mctsThinkingTimeMs[0]} max={LIMITS.mctsThinkingTimeMs[1]} on:change={e => update({ mctsThinkingTimeMs: e.detail })} />
+        <p class="field-help">Used from the next computer move.</p>
       </div>
       <div>
         <label class="field-label" for="s-hd">Suggestions: deals per pass</label>
@@ -1107,7 +1138,7 @@
         <p class="field-help">How many random deals of the hidden cards to try ({LIMITS.hintDeterminizations[0]} to {LIMITS.hintDeterminizations[1]}).</p>
       </div>
       <div>
-        <label class="field-label" for="s-hr">Suggestions: playouts per deal</label>
+        <label class="field-label" for="s-hr">Suggestions: max playouts per deal</label>
         <input id="s-hr" class="field" type="number" inputmode="numeric" min={LIMITS.hintRollouts[0]} max={LIMITS.hintRollouts[1]} step="100" value={settings.hintRollouts} on:change={updateNumber('hintRollouts')} />
         <p class="field-help">{LIMITS.hintRollouts[0]} to {LIMITS.hintRollouts[1].toLocaleString('en')}. Higher is steadier but slower.</p>
       </div>

@@ -86,3 +86,11 @@ test('sanitising is idempotent', () => {
   const once = sanitizeSettings({ numPlayers: 3, hintRollouts: 123456, playerNames: { P1: 'Bo' } })
   assert.deepEqual(sanitizeSettings(once), once)
 })
+
+test('suggestion thinking time: 0 means unlimited, other values are clamped', () => {
+  assert.equal(sanitizeSettings({ hintThinkingMs: 0 }).hintThinkingMs, 0)
+  assert.equal(sanitizeSettings({ hintThinkingMs: 10 }).hintThinkingMs, LIMITS.hintThinkingMs[0])
+  assert.equal(sanitizeSettings({ hintThinkingMs: 1e12 }).hintThinkingMs, LIMITS.hintThinkingMs[1])
+  assert.equal(sanitizeSettings({ hintThinkingMs: 'x' }).hintThinkingMs, DEFAULT_SETTINGS.hintThinkingMs)
+  assert.equal(sanitizeSettings({}).hintThinkingMs, 5000)
+})
