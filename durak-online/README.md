@@ -28,3 +28,11 @@ cargo run --release -p durak-core --example arena -- match mcts-h mcts 200 16 10
 cargo run --release -p durak-core --example arena -- positions durak-core/examples/data/positions.txt
 cargo run --release -p durak-core --example evalfit -- 4000
 ```
+
+Finding mistakes in your own games: export them from the Games panel ("Export all (JSON)"), then
+
+```bash
+cargo run --release -p durak-core --example review -- durak-ai-games.json --lost
+```
+
+checks your moves late in each two-player game against perfect play and lists the ones that gave the game away, saying whether each was the engine's suggestion or your own choice.
