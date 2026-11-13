@@ -8,7 +8,8 @@
 //! Engines: `random` (any legal move), `rules` (the heuristic playout player
 //! on its own), `mcts` (search with random playouts, as before) and `mcts-h`
 //! (search with heuristic playouts). Search settings follow a colon, e.g.
-//! `mcts-h:prior=1,xnodes=100000,xstock=6,c=1.41,cut=1` (see `engine`).
+//! `mcts-h:prior=1,xnodes=100000,xstock=6,c=1.41,cut=1,d=64,p=250` (see `engine`;
+//! `d` and `p` give that engine its own deals and playouts per search).
 //!
 //! `match` plays every deal once per seat for A, so both sides get the same
 //! cards, and reports A's results with a 95% margin. In two-player games both
@@ -43,6 +44,9 @@ struct Search {
     exact_stock: u8,
     exploration: f64,
     cutoff: bool,
+    /// Effort for this engine instead of the match's (0 = the match's).
+    deals: u32,
+    playouts: u32,
 }
 
 /// `random`, `rules`, `mcts` (random playouts), `mcts-h` (heuristic
@@ -56,7 +60,7 @@ fn engine(spec: &str) -> Engine {
         "mcts-h" => Playout::Heuristic,
         other => panic!("unknown engine {other}; use random, rules, mcts or mcts-h"),
     };
-    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false };
+    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0 };
     for kv in opts.split(',').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').expect("settings look like key=value");
         match k {
@@ -65,6 +69,8 @@ fn engine(spec: &str) -> Engine {
             "xstock" => e.exact_stock = v.parse().unwrap(),
             "c" => e.exploration = v.parse().unwrap(),
             "cut" => e.cutoff = v == "1",
+            "d" => e.deals = v.parse().unwrap(),
+            "p" => e.playouts = v.parse().unwrap(),
             other => panic!("unknown setting {other}"),
         }
     }
@@ -110,14 +116,14 @@ fn exact_choice(state: &GameState, effort: Effort, seed: u64) -> Option<Action> 
         return Some(r.actions[0].action.clone());
     }
     // The same search for both engines here, so the endgame is a level field.
-    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false };
+    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0 };
     Some(search(state, plain, effort, seed, Some(&safe)))
 }
 
 fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<&[Action]>) -> Action {
     let params = SolveParams {
-        determinizations: effort.deals,
-        rollouts: effort.playouts,
+        determinizations: if e.deals > 0 { e.deals } else { effort.deals },
+        rollouts: if e.playouts > 0 { e.playouts } else { effort.playouts },
         playout: e.playout,
         prior_weight: e.prior,
         exact_nodes: e.exact_nodes,
