@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use durak_core::{
-    is_exactly_solvable, policy, solve, solve_exact, Action, Card, ExactValue, GameConfig, GameState,
+    is_exactly_solvable, policy, solve, solve_exact, solve_exact_deal, Action, PlayerId, Card, ExactValue, GameConfig, GameState,
     Outcome, Playout, Rank, SolveParams, Suit,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -360,11 +360,75 @@ fn run_positions(args: &[String]) {
     }
 }
 
+/// For each recorded position: deal the hidden cards many ways, solve each
+/// deal exactly (as if both players could see everything), and count how
+/// often each move wins. Shows which moves were right, and how much the
+/// result depended on cards nobody could see.
+fn run_deals(args: &[String]) {
+    let text = std::fs::read_to_string(&args[0]).expect("readable file");
+    let deals: u64 = args.get(1).map_or(60, |s| s.parse().unwrap());
+    let nodes: u64 = args.get(2).map_or(3_000_000, |s| s.parse().unwrap());
+    for line in text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')) {
+        let (state, f) = parse_position(line);
+        let started = Instant::now();
+        println!("
+{}: played {} ({})", f[0], f[10], f[11]);
+        if is_exactly_solvable(&state) {
+            if let Ok(Some(r)) = solve_exact(&state, 50_000_000) {
+                let v: Vec<String> = r.actions.iter().map(|a| format!("{} {:?}", label(&a.action), a.value)).collect();
+                println!("  nothing hidden - exact: {}", v.join(", "));
+                continue;
+            }
+        }
+        let actions = state.legal_actions();
+        // Per action: wins, draws, losses, unsettled.
+        let tally = std::sync::Mutex::new(vec![[0u32; 4]; actions.len()]);
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            // Big searches need a lot of memory each: ARENA_THREADS limits how many run at once.
+            let threads = std::env::var("ARENA_THREADS").ok().and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+            for _ in 0..threads {
+                scope.spawn(|| loop {
+                    let d = next.fetch_add(1, Ordering::Relaxed) as u64;
+                    if d >= deals {
+                        break;
+                    }
+                    let det = state.determinize(PlayerId::P0, &mut StdRng::seed_from_u64(d)).unwrap();
+                    let Ok(Some(r)) = solve_exact_deal(&det, nodes) else { continue };
+                    let mut t = tally.lock().unwrap();
+                    for (slot, a) in r.actions.iter().enumerate() {
+                        let k = match a.value {
+                            Some(ExactValue::Win) => 0,
+                            Some(ExactValue::Draw) => 1,
+                            Some(ExactValue::Loss) => 2,
+                            None => 3,
+                        };
+                        t[slot][k] += 1;
+                    }
+                });
+            }
+        });
+        let tally = tally.into_inner().unwrap();
+        let mut rows: Vec<(String, [u32; 4])> =
+            actions.iter().zip(tally).map(|(a, t)| (label(a), t)).collect();
+        rows.sort_by(|a, b| b.1[0].cmp(&a.1[0]));
+        for (name, t) in rows {
+            let settled = t[0] + t[1] + t[2];
+            let pct = if settled > 0 { 100.0 * f64::from(t[0]) / f64::from(settled) } else { 0.0 };
+            println!("  {name:<16} wins in {:>3} of {:>3} solved deals ({pct:>3.0}%){}", t[0], settled,
+                if t[3] > 0 { format!(", {} unsettled", t[3]) } else { String::new() });
+        }
+        println!("  ({:.0} s)", started.elapsed().as_secs_f64());
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("match") => run_match(&args[1..]),
         Some("positions") => run_positions(&args[1..]),
+        Some("deals") => run_deals(&args[1..]),
         _ => eprintln!("usage: arena match <A> <B> [deals] [deals per search] [playouts] [players] [deck]\n       arena positions <file> [deals per search] [playouts]"),
     }
 }

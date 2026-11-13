@@ -1,0 +1,13 @@
+# Last analysed game of 2026-11-13 (trump spades, 36 cards, passing, classic). I am P0.
+# name|trump|attacker|phase|batch|my hand|opponent hand|table|stock|discard|played|note
+step 46|S|P1|D|1|KS KD KC 8S AS 9S|?? ?? ?? ?? ??|TC|QS ?? ?? ?? ?? ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S|take|score 77
+step 54|S|P1|D|1|KS KD KC 8S AS 9S TC JH|?? ?? ?? ?? ??|KH|QS ?? ?? ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S|take|score 73
+step 58|S|P1|D|1|KS KD KC 8S AS 9S TC JH KH|?? ?? ?? ?? ??|7C|QS ?? ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S|beat with 10♣|score 78
+step 60|S|P0|A|0|KS KD KC 8S AS 9S KH JH|?? ?? ?? ?? ?? ??||QS ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC|attack K♣|score 82
+step 63|S|P0|A|1|KS KD JH 8S AS 9S KH|?? ?? ?? ?? ??|KC/7S|QS ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC|add K♥|score 81
+step 66|S|P0|A|1|KS KD JH 8S AS 9S|?? ?? ?? ??|KC/7S KH/AH|QS ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC|add K♦|score 78
+step 69|S|P0|A|1|KS 9S JH 8S AS|?? ?? ??|KC/7S KH/AH KD/TS|QS ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC|add K♠ (trump)|score 76
+step 72|S|P0|T|1|AS 9S JH 8S|?? ?? ??|KC/7S KH/AH KD/TS KS|QS ?? ?? ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC|done|score 77
+step 75|S|P0|A|0|AS 9S JH 8S 6C AC|?? ?? ?? KC 7S KH AH KD TS KS||QS ??|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC|attack 6♣|score 69
+step 82|S|P1|D|1|AS 9S JH 8S AC QD|TS ?? ?? KS 7S KH AH KD|JC|QS|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC 6C KC|beat with A♣|score 60
+step 85|S|P1|D|1|AS 9S JH 8S QD|TS KD ?? KS 7S KH AH|JC/AC JD|QS|6H TH 6D TD 7H QH 7D 8D 8H 9H 9D AD 8C 9C QC 6S 7C TC 6C KC|beat with Q♦|score 38
