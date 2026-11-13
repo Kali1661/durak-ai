@@ -151,6 +151,8 @@ fn run_solve(body: &str) -> Result<String, (u16, String)> {
         determinizations: r.determinizations.unwrap_or(1),
         rollouts: r.rollouts_per_determinization.unwrap_or(DEFAULT_ROLLOUTS),
         max_depth: r.max_depth.unwrap_or(DEFAULT_MAX_DEPTH),
+        // As in the browser engine (see durak-wasm).
+        shared_tree: true,
         ..SolveParams::default()
     };
     let result = solve(&r.state, params, r.seed.unwrap_or_else(seed)).map_err(|e| (422, e.to_string()))?;
