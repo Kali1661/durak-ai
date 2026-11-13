@@ -33,11 +33,11 @@ const searchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(
 let kept = null // { key, search }
 
 function keptSearch(req) {
-  const key = JSON.stringify([req.state, req.max_depth])
+  const key = JSON.stringify([req.state, req.max_depth, req.beliefs ?? null])
   if (kept?.key !== key) {
     kept?.search.free()
     kept = null
-    kept = { key, search: new KeptSearch({ state: req.state, max_depth: req.max_depth }) }
+    kept = { key, search: new KeptSearch({ state: req.state, max_depth: req.max_depth, beliefs: req.beliefs ?? null }) }
   }
   return kept.search
 }

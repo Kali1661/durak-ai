@@ -5,7 +5,7 @@
 //! bad data.
 
 use durak_core::{
-    pick_random_action as core_pick_random_action, Action, Card, EngineError, GameConfig,
+    pick_random_action as core_pick_random_action, Action, Beliefs, Card, EngineError, GameConfig,
     GameState, Outcome, PlayerId, Rank, Search, SolveParams,
 };
 use serde::{Deserialize, Serialize};
@@ -166,6 +166,36 @@ pub struct SolveRequest {
     /// Fixed seed for reproducible results; random when omitted.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// What the opponent's play suggests they hold (see [`opponent_beliefs`]).
+    #[serde(default)]
+    pub beliefs: Option<Beliefs>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HistoryStep {
+    pub state: GameState,
+    /// The move that led to `state`; none for a step that only revealed a card.
+    #[serde(default)]
+    pub action: Option<Action>,
+}
+
+/// What the opponent's moves so far suggest about their hand, for the player
+/// in seat 0 of a two-player game: `initial` is the first position, `steps`
+/// every position since with the move that led to it. Give the result to
+/// [`solve`] / [`KeptSearch`] as `beliefs`.
+#[wasm_bindgen]
+pub fn opponent_beliefs(initial: JsValue, steps: JsValue) -> Result<JsValue, JsValue> {
+    let initial: GameState = parse(initial, "the first position")?;
+    let steps: Vec<HistoryStep> = parse(steps, "the moves so far")?;
+    let mut beliefs = Beliefs::default();
+    let mut before = &initial;
+    for step in &steps {
+        if let Some(action) = &step.action {
+            beliefs.observe(PlayerId::P0, before, action, &step.state);
+        }
+        before = &step.state;
+    }
+    out(&beliefs)
 }
 
 /// Evaluate every legal action for the player to move.
@@ -184,7 +214,8 @@ pub fn solve(req: JsValue) -> Result<JsValue, JsValue> {
         ..SolveParams::app()
     };
     let seed = req.seed.unwrap_or_else(random_seed);
-    out(&durak_core::solve(&req.state, params, seed).map_err(err)?)
+    let mut search = Search::new(&req.state, params, seed).map_err(err)?.with_beliefs(req.beliefs);
+    out(&search.run(params.determinizations, params.rollouts).map_err(err)?)
 }
 
 /// A search of one position that is kept between calls: each `run` adds work
@@ -206,7 +237,7 @@ impl KeptSearch {
         let req: SolveRequest = parse(req, "the solve request")?;
         let params = SolveParams { max_depth: req.max_depth.unwrap_or(DEFAULT_MAX_DEPTH), ..SolveParams::app() };
         let seed = req.seed.unwrap_or_else(random_seed);
-        Ok(KeptSearch { inner: Search::new(&req.state, params, seed).map_err(err)? })
+        Ok(KeptSearch { inner: Search::new(&req.state, params, seed).map_err(err)?.with_beliefs(req.beliefs) })
     }
 
     pub fn run(&mut self, determinizations: u32, rollouts: u32) -> Result<JsValue, JsValue> {

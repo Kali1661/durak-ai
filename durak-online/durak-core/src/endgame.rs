@@ -977,3 +977,583 @@ impl PositionSearch for ReferenceSearch {
         self.nodes
     }
 }
+
+// ── Fast playouts ───────────────────────────────────────────────────────────
+//
+// The playouts of the search for two-player games, on the compact position:
+// the same heuristic player as `policy` and the same hand score as `eval`,
+// many times faster than moving real `GameState`s around. The tests check
+// both against the originals move by move.
+
+/// What a card is worth keeping, as in `policy`: its rank, plus 20 for a trump.
+fn worth(card: u64, trump_cards: u64) -> i32 {
+    (card.trailing_zeros() % 13) as i32 + 2 + if card & trump_cards != 0 { 20 } else { 0 }
+}
+
+/// A move in a playout: its cost for the heuristic player, a code that names
+/// it (the kind of move and the card), and the position it leads to.
+type Move = (i32, u32, Pos);
+
+const LAY: u32 = 0;
+const LET_DEFEND: u32 = 1 << 6;
+const PASS: u32 = 2 << 6;
+const DEFEND: u32 = 3 << 6;
+const REFLECT: u32 = 4 << 6;
+const SHOW: u32 = 5 << 6;
+const TAKE: u32 = 6 << 6;
+const THROW: u32 = 7 << 6;
+const DONE: u32 = 8 << 6;
+
+fn code(kind: u32, card: u64) -> u32 {
+    kind | card.trailing_zeros()
+}
+
+impl Pos {
+    /// Every legal move as (cost for the heuristic player, resulting
+    /// position), with the costs of `policy::move_cost`, unsorted. As in
+    /// [`Pos::children`], with several cards to beat the defender answers
+    /// the lowest first (the real rules say the first one laid; the cards
+    /// have no order here, and it makes no difference to what can be beaten).
+    fn playout_moves(&self, rules: &Rules, out: &mut Vec<Move>) {
+        let a = self.attacker as usize;
+        let d = 1 - a;
+        let trump_cards = RANKS << (rules.trump * 13);
+        // Cards worth less than this are added to an attack rather than kept.
+        let limit = if self.stock == 0 { 15 } else { 12 };
+
+        match self.phase {
+            ATTACKING | ADDING => {
+                let leading = self.atk == 0;
+                let mut playable = if leading {
+                    self.hand[a]
+                } else if self.can_add_pile(rules) {
+                    self.hand[a] & same_ranks(self.atk | self.def)
+                } else {
+                    0
+                };
+                while playable != 0 {
+                    let card = playable & playable.wrapping_neg();
+                    playable ^= card;
+                    let w = worth(card, trump_cards);
+                    out.push((if leading { w } else { w - limit }, code(LAY, card), self.lay(card, rules)));
+                }
+                if self.phase == ADDING {
+                    let mut p = *self;
+                    p.phase = DEFENDING;
+                    out.push((0, LET_DEFEND, p));
+                } else if !leading {
+                    let mut p = *self;
+                    p.discarded = true;
+                    p.next_trick(d, rules);
+                    out.push((0, PASS, p));
+                }
+            }
+            DEFENDING => {
+                let untouched = self.def == 0;
+                let piles = self.atk.count_ones();
+                let room = (piles as usize) < self.pile_limit(rules);
+                let attacker_cards = self.hand[a].count_ones();
+                let same_rank = same_ranks(self.atk);
+
+                {
+                    let target = self.open & self.open.wrapping_neg();
+                    let target_suit = RANKS << (target.trailing_zeros() / 13 * 13);
+                    let higher = target_suit & !(target | (target - 1));
+                    let mut beaters =
+                        self.hand[d] & if target & trump_cards != 0 { higher } else { higher | trump_cards };
+                    while beaters != 0 {
+                        let card = beaters & beaters.wrapping_neg();
+                        beaters ^= card;
+                        let mut p = *self;
+                        p.hand[d] ^= card;
+                        p.def |= card;
+                        p.open ^= target;
+                        if p.open == 0 {
+                            p.phase = ATTACKING;
+                        }
+                        out.push((worth(card, trump_cards), code(DEFEND, card), p));
+                    }
+                }
+                if untouched {
+                    let mut passers = self.hand[d] & same_rank;
+                    while passers != 0 {
+                        let card = passers & passers.wrapping_neg();
+                        passers ^= card;
+                        if rules.reflecting && room && attacker_cards >= piles + 1 {
+                            let mut p = *self;
+                            p.hand[d] ^= card;
+                            p.atk |= card;
+                            p.open |= card;
+                            p.attacker = d as u8;
+                            p.batch = 0;
+                            out.push((worth(card, trump_cards) - 8, code(REFLECT, card), p));
+                        }
+                        if rules.trump_reflecting
+                            && card & trump_cards != 0
+                            && self.shown & card == 0
+                            && attacker_cards >= piles
+                        {
+                            let mut p = *self;
+                            p.shown |= card;
+                            p.attacker = d as u8;
+                            p.batch = 0;
+                            out.push((-10, code(SHOW, card), p));
+                        }
+                    }
+                }
+                let on_table = (self.atk | self.def).count_ones() as i32;
+                let take = match self.stock {
+                    0 => i32::MAX / 2,
+                    n if n >= 12 => 24 + 3 * on_table,
+                    n if n >= 6 => 28 + 3 * on_table,
+                    _ => 31 + 3 * on_table,
+                };
+                let mut p = *self;
+                p.phase = THROWING;
+                out.push((take, TAKE, p));
+            }
+            _ => {
+                if self.can_add_pile(rules) {
+                    let mut playable = self.hand[a] & same_ranks(self.atk | self.def);
+                    while playable != 0 {
+                        let card = playable & playable.wrapping_neg();
+                        playable ^= card;
+                        let mut p = *self;
+                        p.hand[a] ^= card;
+                        p.atk |= card;
+                        p.open |= card;
+                        out.push((worth(card, trump_cards) - limit, code(THROW, card), p));
+                    }
+                }
+                let mut p = *self;
+                p.hand[d] |= self.atk | self.def;
+                p.next_trick(a, rules);
+                out.push((0, DONE, p));
+            }
+        }
+    }
+
+    /// Chance the attacker wins, as `eval::attacker_wins` scores it.
+    fn attacker_wins(&self, rules: &Rules) -> f64 {
+        let trump_cards = RANKS << (rules.trump * 13);
+        let a = self.hand[self.attacker as usize];
+        let d = self.hand[1 - self.attacker as usize];
+        let count = |h: u64| f64::from(h.count_ones());
+        let strength = |h: u64| {
+            let mut t = h & trump_cards;
+            let mut sum = 0.0;
+            while t != 0 {
+                sum += f64::from(t.trailing_zeros() % 13) - 3.0;
+                t &= t - 1;
+            }
+            sum / 9.0
+        };
+        // Cards of `h` that nothing in `other` beats.
+        let safe = |h: u64, other: u64| {
+            let mut left = h;
+            let mut n = 0.0;
+            while left != 0 {
+                let card = left & left.wrapping_neg();
+                left ^= card;
+                let suit = RANKS << (card.trailing_zeros() / 13 * 13);
+                let higher = suit & !(card | (card - 1));
+                let beaters = if card & trump_cards != 0 { higher } else { higher | trump_cards };
+                if other & beaters == 0 {
+                    n += 1.0;
+                }
+            }
+            n
+        };
+        let x = [
+            1.0,
+            count(d) - count(a),
+            count(a & trump_cards) - count(d & trump_cards),
+            strength(a) - strength(d),
+            safe(a, d) - safe(d, a),
+            (count(a) + count(d)) / 10.0,
+        ];
+        let z: f64 = x.iter().zip(crate::eval::WEIGHTS).map(|(x, w)| x * w).sum();
+        1.0 / (1.0 + (-z).exp())
+    }
+}
+
+/// A playout of a two-player position with every card known: the heuristic
+/// player of `policy` on both sides until the game ends, `max_depth` moves
+/// have been played (returns `true` then), or - with `cutoff` - the stock is
+/// empty at the start of a trick and the hands are scored instead. Returns
+/// the value for seat 0 (1 = not the durak, 0 = the durak) and for seat 1.
+/// `None` if the position is not one this handles.
+pub(crate) fn fast_playout(
+    state: &GameState,
+    rng: &mut impl rand::Rng,
+    cutoff: bool,
+    max_depth: u32,
+) -> Option<([f64; 2], bool)> {
+    if state.num_players() != 2 || state.stock.len() > MAX_STOCK || !state.is_fully_known() {
+        return None;
+    }
+    let mut moves = Vec::with_capacity(48);
+    Some(play_out(Pos::from_state(state), &Rules::of(state), rng, cutoff, max_depth, &mut moves))
+}
+
+/// [`fast_playout`] from a compact position; `moves` is scratch space.
+fn play_out(
+    mut pos: Pos,
+    rules: &Rules,
+    rng: &mut impl rand::Rng,
+    cutoff: bool,
+    max_depth: u32,
+    moves: &mut Vec<Move>,
+) -> ([f64; 2], bool) {
+    let mut depth = 0u32;
+    loop {
+        if let Some(v) = pos.terminal(rules) {
+            let value = match v {
+                0 => [0.0, 1.0],
+                1 => [1.0, 1.0],
+                _ => [1.0, 0.0],
+            };
+            return (value, false);
+        }
+        if depth >= max_depth {
+            return ([0.5, 0.5], true);
+        }
+        if cutoff && pos.stock == 0 && pos.phase == ATTACKING && pos.atk == 0 {
+            let p = pos.attacker_wins(rules);
+            return (if pos.attacker == 0 { [p, 1.0 - p] } else { [1.0 - p, p] }, false);
+        }
+        moves.clear();
+        pos.playout_moves(rules, moves);
+        let pick = if moves.len() == 1 {
+            0
+        } else if rng.gen_bool(crate::policy::RANDOM_MOVE_CHANCE) {
+            rng.gen_range(0..moves.len())
+        } else {
+            let mut best = 0;
+            for (i, m) in moves.iter().enumerate() {
+                if m.0 < moves[best].0 {
+                    best = i;
+                }
+            }
+            best
+        };
+        pos = moves[pick].2;
+        depth += 1;
+    }
+}
+
+/// For the tests: the heuristic player's cost for every legal move of a fully
+/// known two-player position, each with whether the move leads to `next`
+/// (pass the position after a move to find that move), plus the hand score
+/// and whether the game is over - all by the fast code.
+#[doc(hidden)]
+pub fn fast_playout_probe(state: &GameState, next: Option<&GameState>) -> (Vec<(i32, bool)>, f64, bool) {
+    let rules = Rules::of(state);
+    let pos = Pos::from_state(state);
+    let mut moves = Vec::new();
+    pos.playout_moves(&rules, &mut moves);
+    let target = next.map(Pos::from_state);
+    (
+        moves.iter().map(|(c, _, p)| (*c, target.is_some_and(|t| t == *p))).collect(),
+        pos.attacker_wins(&rules),
+        pos.terminal(&rules).is_some(),
+    )
+}
+
+// ── Fast shared tree ────────────────────────────────────────────────────────
+
+/// The shared tree of `mcts::SharedTree` for two-player games with the
+/// heuristic playout player, searched entirely on compact positions: the
+/// same algorithm (one tree over all deals, statistics pooled per move
+/// sequence, each player choosing by their own results), several times
+/// faster. Each iteration deals the hidden cards straight into a [`Pos`].
+pub(crate) struct FastTree {
+    perspective: PlayerId,
+    params: crate::SolveParams,
+    rng: StdRng,
+    /// The position with only the cards I can see in the opponent's hand...
+    seen: Pos,
+    rules: Rules,
+    /// ...the cards I cannot see...
+    pool: Vec<u64>,
+    /// ...how many of them the opponent holds, and which places in the stock
+    /// (see [`Rules::stock`]) take the rest.
+    hidden_in_hand: usize,
+    stock_slots: Vec<usize>,
+    /// How likely each card of `pool` is to be in the opponent's hand, if
+    /// their play has said anything.
+    weights: Option<Vec<f32>>,
+    /// My legal moves as the caller knows them, each with its code here.
+    root_actions: Vec<Action>,
+    root_codes: Vec<u32>,
+    nodes: Vec<TreeNode>,
+    iterations: u64,
+}
+
+struct TreeNode {
+    /// Sum of playout values for seat 0 and seat 1.
+    value: [f64; 2],
+    visits: u32,
+    cutoffs: u32,
+    children: Vec<TreeChild>,
+}
+
+struct TreeChild {
+    code: u32,
+    node: u32,
+    /// How often the move was available when its parent was visited.
+    available: u32,
+}
+
+impl TreeNode {
+    fn new() -> Self {
+        TreeNode { value: [0.0; 2], visits: 0, cutoffs: 0, children: Vec::new() }
+    }
+}
+
+impl FastTree {
+    /// `None` when the position is not one the fast tree handles (the
+    /// caller then searches the slow way).
+    pub(crate) fn new(
+        state: &GameState,
+        seed: u64,
+        perspective: PlayerId,
+        params: &crate::SolveParams,
+    ) -> Option<Self> {
+        if state.num_players() != 2
+            || params.playout != crate::Playout::Heuristic
+            || state.stock.len() > MAX_STOCK
+            || state.actor_to_move() != perspective
+            || state.is_terminal()
+        {
+            return None;
+        }
+        let me = perspective.index();
+        let pool: Vec<u64> = state.hidden_pool(perspective).ok()?.iter().map(bit).collect();
+        let (hand_slots, stock_slots) = state.hidden_slots(perspective);
+        if pool.len() != hand_slots.len() + stock_slots.len() || hand_slots.iter().any(|(h, _)| *h == me) {
+            return None;
+        }
+
+        // One dealt position gives the shape; then the hidden cards come out again.
+        let dealt = state.determinize(perspective, &mut StdRng::seed_from_u64(seed)).ok()?;
+        let dealt_pos = Pos::from_state(&dealt);
+        let mut seen = dealt_pos;
+        for (h, i) in &hand_slots {
+            seen.hand[*h] &= !bit(&dealt.hands[*h][*i]);
+        }
+        let rules = Rules::of(&dealt);
+
+        // My moves by the real rules, matched to the moves of the compact
+        // position by where they lead. (They do not depend on the deal.)
+        let root_actions = state.legal_actions();
+        let dealt_actions = dealt.legal_actions();
+        let mut moves = Vec::new();
+        dealt_pos.playout_moves(&rules, &mut moves);
+        if moves.len() != root_actions.len() {
+            return None;
+        }
+        let mut root_codes = Vec::with_capacity(root_actions.len());
+        for action in &root_actions {
+            let played = dealt_actions.iter().find(|m| m.same_move(action))?;
+            let mut next = dealt.clone();
+            next.execute(played).ok()?;
+            let target = Pos::from_state(&next);
+            let code = moves.iter().find(|m| m.2 == target)?.1;
+            if root_codes.contains(&code) {
+                return None;
+            }
+            root_codes.push(code);
+        }
+
+        Some(FastTree {
+            perspective,
+            params: *params,
+            rng: StdRng::seed_from_u64(seed),
+            seen,
+            rules,
+            hidden_in_hand: hand_slots.len(),
+            stock_slots,
+            pool,
+            weights: None,
+            root_actions,
+            root_codes,
+            nodes: vec![TreeNode::new()],
+            iterations: 0,
+        })
+    }
+
+    pub(crate) fn set_beliefs(&mut self, beliefs: Option<crate::Beliefs>) {
+        self.weights = beliefs.filter(|b| !b.is_blank()).map(|b| {
+            self.pool
+                .iter()
+                .map(|card| {
+                    let at = card.trailing_zeros();
+                    let suit = crate::Suit::ALL[(at / 13) as usize];
+                    let rank = crate::Rank::ALL[(at % 13) as usize];
+                    b.weight((suit, rank))
+                })
+                .collect()
+        });
+    }
+
+    pub(crate) fn iterations(&self) -> u64 {
+        self.iterations
+    }
+
+    /// Deal the hidden cards: the opponent's first (by the beliefs, if any),
+    /// the rest into the stock.
+    fn deal(&mut self, cards: &mut Vec<u64>, odds: &mut Vec<f32>) -> (Pos, Rules) {
+        use rand::Rng;
+        cards.clear();
+        cards.extend_from_slice(&self.pool);
+        let n = cards.len();
+        let held = self.hidden_in_hand;
+        match &self.weights {
+            Some(w) => {
+                odds.clear();
+                odds.extend_from_slice(w);
+                for k in 0..held.min(n) {
+                    let total: f32 = odds[k..].iter().sum();
+                    let mut at = self.rng.gen_range(0.0..1.0f32) * total;
+                    let mut pick = n - 1;
+                    for (j, w) in odds.iter().enumerate().skip(k) {
+                        if at < *w {
+                            pick = j;
+                            break;
+                        }
+                        at -= *w;
+                    }
+                    cards.swap(k, pick);
+                    odds.swap(k, pick);
+                }
+                for i in (held + 1..n).rev() {
+                    let j = self.rng.gen_range(held..=i);
+                    cards.swap(i, j);
+                }
+            }
+            None => {
+                for i in (1..n).rev() {
+                    let j = self.rng.gen_range(0..=i);
+                    cards.swap(i, j);
+                }
+            }
+        }
+        let mut pos = self.seen;
+        let mut rules = self.rules;
+        let opponent = 1 - self.perspective.index();
+        for card in &cards[..held] {
+            pos.hand[opponent] |= card;
+        }
+        for (slot, card) in self.stock_slots.iter().zip(&cards[held..]) {
+            rules.stock[*slot] = *card;
+        }
+        (pos, rules)
+    }
+
+    pub(crate) fn run(&mut self, iterations: u32) -> Result<(), EngineError> {
+        if self.root_actions.is_empty() {
+            return Ok(());
+        }
+        let crate::SolveParams { max_depth, exploration, cutoff, .. } = self.params;
+        let candidates = usize::from(self.params.candidates);
+        let min_stock = self.params.candidates_min_stock;
+        let max_nodes = crate::MAX_TREE_NODES;
+        let mut moves: Vec<Move> = Vec::with_capacity(48);
+        let mut scratch: Vec<Move> = Vec::with_capacity(48);
+        let mut here: Vec<(usize, Pos)> = Vec::with_capacity(48);
+        let mut path: Vec<usize> = Vec::with_capacity(64);
+        let mut cards: Vec<u64> = Vec::with_capacity(self.pool.len());
+        let mut odds: Vec<f32> = Vec::with_capacity(self.pool.len());
+
+        for _ in 0..iterations {
+            let (mut pos, rules) = self.deal(&mut cards, &mut odds);
+            let nodes = &mut self.nodes;
+            let mut cur = 0usize;
+            path.clear();
+            path.push(0);
+
+            while pos.terminal(&rules).is_none() {
+                moves.clear();
+                pos.playout_moves(&rules, &mut moves);
+                // Untried moves are expanded best-looking first.
+                moves.sort_by_key(|m| m.0);
+                // My own decision is always searched in full.
+                if cur != 0 && candidates > 0 && moves.len() > candidates && pos.stock >= min_stock {
+                    moves.truncate(candidates);
+                }
+                // Which known moves are available in this deal, and the first untried one.
+                here.clear();
+                let mut untried: Option<(u32, Pos)> = None;
+                for &(_, code, next) in &moves {
+                    match nodes[cur].children.iter().position(|c| c.code == code) {
+                        Some(ci) => {
+                            nodes[cur].children[ci].available += 1;
+                            here.push((ci, next));
+                        }
+                        None if untried.is_none() => untried = Some((code, next)),
+                        None => {}
+                    }
+                }
+                if let Some((code, next)) = untried {
+                    // A full tree stops growing; the playout starts here instead.
+                    if nodes.len() < max_nodes {
+                        let node = nodes.len();
+                        nodes.push(TreeNode::new());
+                        nodes[cur].children.push(TreeChild { code, node: node as u32, available: 1 });
+                        path.push(node);
+                        pos = next;
+                        break;
+                    }
+                    if here.is_empty() {
+                        break;
+                    }
+                }
+                let actor = pos.actor();
+                let mut best = 0;
+                let mut best_uct = f64::NEG_INFINITY;
+                for (i, &(ci, _)) in here.iter().enumerate() {
+                    let c = &nodes[cur].children[ci];
+                    let n = &nodes[c.node as usize];
+                    let visits = f64::from(n.visits.max(1));
+                    let uct = n.value[actor] / visits + exploration * (f64::from(c.available).ln() / visits).sqrt();
+                    if uct > best_uct {
+                        best_uct = uct;
+                        best = i;
+                    }
+                }
+                let (ci, next) = here[best];
+                cur = nodes[cur].children[ci].node as usize;
+                pos = next;
+                path.push(cur);
+            }
+
+            let (value, cut_off) = play_out(pos, &rules, &mut self.rng, cutoff, max_depth, &mut scratch);
+            for &idx in &path {
+                let node = &mut nodes[idx];
+                node.visits += 1;
+                node.cutoffs += u32::from(cut_off);
+                node.value[0] += value[0];
+                node.value[1] += value[1];
+            }
+            self.iterations += 1;
+        }
+        Ok(())
+    }
+
+    /// (playouts, value sum for me, cut-off playouts) for each of my moves,
+    /// in `legal_actions()` order.
+    pub(crate) fn totals(&self) -> Vec<(u64, f64, u64)> {
+        let me = self.perspective.index();
+        self.root_codes
+            .iter()
+            .map(|code| match self.nodes[0].children.iter().find(|c| c.code == *code) {
+                Some(c) => {
+                    let n = &self.nodes[c.node as usize];
+                    (u64::from(n.visits), n.value[me], u64::from(n.cutoffs))
+                }
+                None => (0, 0.0, 0),
+            })
+            .collect()
+    }
+}

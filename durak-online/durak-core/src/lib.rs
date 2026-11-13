@@ -28,13 +28,15 @@
 
 mod endgame;
 mod mcts;
+pub mod belief;
 pub mod eval;
 pub mod policy;
 
 #[doc(hidden)]
 pub use endgame::solve_exact_reference;
-pub use endgame::{is_exactly_solvable, solve_exact, solve_exact_deal, ExactAction, ExactResult, ExactValue};
+pub use endgame::{fast_playout_probe, is_exactly_solvable, solve_exact, solve_exact_deal, ExactAction, ExactResult, ExactValue};
 
+pub use belief::{Beliefs, Evidence, Strength};
 pub use policy::Playout;
 pub use mcts::{Search, SharedTree, MAX_TREE_NODES,
     mcts_evaluate_actions, solve, ActionEval, MctsEval, SolveParams, SolveResult,
@@ -1411,6 +1413,19 @@ impl GameState {
         perspective: PlayerId,
         rng: &mut impl Rng,
     ) -> Result<Self, EngineError> {
+        self.determinize_with(perspective, rng, None)
+    }
+
+    /// [`GameState::determinize`], dealing the opponent's hidden cards by
+    /// what their play so far suggests they hold (two-player games; see
+    /// [`Beliefs`]). Without beliefs every hidden card is equally likely to
+    /// be anywhere.
+    pub fn determinize_with(
+        &self,
+        perspective: PlayerId,
+        rng: &mut impl Rng,
+        beliefs: Option<&Beliefs>,
+    ) -> Result<Self, EngineError> {
         if perspective.index() >= self.num_players() {
             return invalid_input(format!("{perspective:?} is not a player in this game"));
         }
@@ -1429,9 +1444,18 @@ impl GameState {
                 pool.len()
             ));
         }
-        for i in (1..pool.len()).rev() {
+        // The hand slots are filled first, from the front of the pool.
+        let chosen = match beliefs {
+            Some(b) if self.num_players() == 2 && !b.is_blank() => {
+                belief::deal_weighted(&mut pool, hand_slots.len(), b, rng);
+                hand_slots.len()
+            }
+            _ => 0,
+        };
+        let rest = &mut pool[chosen..];
+        for i in (1..rest.len()).rev() {
             let j = rng.gen_range(0..=i);
-            pool.swap(i, j);
+            rest.swap(i, j);
         }
 
         let mut state = self.clone();

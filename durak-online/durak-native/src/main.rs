@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use durak_core::{solve_exact, GameState, Search, SolveParams};
+use durak_core::{solve_exact, Beliefs, GameState, Search, SolveParams};
 use serde::Deserialize;
 use tiny_http::{Header, Method, Request, Response, Server};
 
@@ -47,6 +47,9 @@ struct SolveRequest {
     /// about the same position.
     #[serde(default)]
     search: Option<String>,
+    /// What the opponent's play suggests they hold.
+    #[serde(default)]
+    beliefs: Option<Beliefs>,
 }
 
 #[derive(Deserialize)]
@@ -155,8 +158,8 @@ fn handle(mut req: Request, origin: &str, cores: usize) {
 }
 
 /// Searches kept between requests, by the id the app's worker sent: the
-/// search, its depth limit and when it was last used.
-type Kept = HashMap<String, (Search, u32, Instant)>;
+/// search, its depth limit and beliefs, and when it was last used.
+type Kept = HashMap<String, (Search, u32, Option<Beliefs>, Instant)>;
 
 fn kept() -> MutexGuard<'static, Kept> {
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
@@ -172,10 +175,14 @@ fn run_solve(body: &str) -> Result<String, (u16, String)> {
     // made for it (as the browser engine does, see durak-wasm).
     let held = r.search.as_ref().and_then(|id| kept().remove(id));
     let mut search = match held {
-        Some((search, depth, _)) if depth == max_depth && *search.state() == r.state => search,
+        Some((search, depth, beliefs, _)) if depth == max_depth && beliefs == r.beliefs && *search.state() == r.state => {
+            search
+        }
         _ => {
             let params = SolveParams { max_depth, ..SolveParams::app() };
-            Search::new(&r.state, params, r.seed.unwrap_or_else(seed)).map_err(|e| (422, e.to_string()))?
+            Search::new(&r.state, params, r.seed.unwrap_or_else(seed))
+                .map_err(|e| (422, e.to_string()))?
+                .with_beliefs(r.beliefs.clone())
         }
     };
     let result = search
@@ -184,9 +191,9 @@ fn run_solve(body: &str) -> Result<String, (u16, String)> {
 
     if let Some(id) = r.search {
         let mut kept = kept();
-        kept.retain(|_, (_, _, used)| used.elapsed() < KEEP_SEARCHES);
+        kept.retain(|_, (_, _, _, used)| used.elapsed() < KEEP_SEARCHES);
         if kept.len() < MAX_KEPT_SEARCHES {
-            kept.insert(id, (search, max_depth, Instant::now()));
+            kept.insert(id, (search, max_depth, r.beliefs, Instant::now()));
         }
     }
     serde_json::to_string(&result).map_err(|e| (500, e.to_string()))

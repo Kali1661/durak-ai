@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use durak_core::{
-    is_exactly_solvable, policy, solve, solve_exact, solve_exact_deal, Action, PlayerId, Card, ExactValue, GameConfig, GameState,
+    is_exactly_solvable, policy, solve, solve_exact, solve_exact_deal, Action, Beliefs, PlayerId, Card, ExactValue, GameConfig, GameState,
     Outcome, Playout, Rank, SolveParams, Suit,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -53,6 +53,8 @@ struct Search {
     kstock: u8,
     /// One tree over all deals.
     tree: bool,
+    /// Guess the opponent's hand from their play (two players).
+    inf: bool,
 }
 
 /// `random`, `rules`, `mcts` (random playouts), `mcts-h` (heuristic
@@ -66,7 +68,7 @@ fn engine(spec: &str) -> Engine {
         "mcts-h" => Playout::Heuristic,
         other => panic!("unknown engine {other}; use random, rules, mcts or mcts-h"),
     };
-    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false };
+    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false };
     for kv in opts.split(',').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').expect("settings look like key=value");
         match k {
@@ -80,6 +82,7 @@ fn engine(spec: &str) -> Engine {
             "k" => e.candidates = v.parse().unwrap(),
             "kstock" => e.kstock = v.parse().unwrap(),
             "tree" => e.tree = v == "1",
+            "inf" => e.inf = v == "1",
             other => panic!("unknown setting {other}"),
         }
     }
@@ -94,7 +97,7 @@ struct Effort {
 
 const EXACT_NODES: u64 = 300_000;
 
-fn choose(state: &GameState, e: Engine, effort: Effort, seed: u64) -> Action {
+fn choose(state: &GameState, e: Engine, effort: Effort, seed: u64, beliefs: &Beliefs) -> Action {
     if state.num_players() == 2 && is_exactly_solvable(state) {
         if let Some(a) = exact_choice(state, effort, seed) {
             return a;
@@ -106,7 +109,7 @@ fn choose(state: &GameState, e: Engine, effort: Effort, seed: u64) -> Action {
             acts[StdRng::seed_from_u64(seed).gen_range(0..acts.len())].clone()
         }
         Engine::Rules => policy::heuristic_action(state).expect("game running"),
-        Engine::Search(e) => search(state, e, effort, seed, None),
+        Engine::Search(e) => search(state, e, effort, seed, None, e.inf.then_some(beliefs)),
     }
 }
 
@@ -125,11 +128,11 @@ fn exact_choice(state: &GameState, effort: Effort, seed: u64) -> Option<Action> 
         return Some(r.actions[0].action.clone());
     }
     // The same search for both engines here, so the endgame is a level field.
-    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false };
-    Some(search(state, plain, effort, seed, Some(&safe)))
+    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false };
+    Some(search(state, plain, effort, seed, Some(&safe), None))
 }
 
-fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<&[Action]>) -> Action {
+fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<&[Action]>, beliefs: Option<&Beliefs>) -> Action {
     let params = SolveParams {
         determinizations: if e.deals > 0 { e.deals } else { effort.deals },
         rollouts: if e.playouts > 0 { e.playouts } else { effort.playouts },
@@ -144,7 +147,11 @@ fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<
         shared_tree: e.tree,
         ..SolveParams::default()
     };
-    let r = solve(state, params, seed).expect("search runs");
+    let r = durak_core::Search::new(state, params, seed)
+        .expect("valid search")
+        .with_beliefs(beliefs.cloned())
+        .run(params.determinizations, params.rollouts)
+        .expect("search runs");
     r.actions
         .iter()
         .find(|a| only.is_none_or(|o| o.iter().any(|x| x.same_move(&a.action))))
@@ -156,13 +163,21 @@ fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<
 /// Play one game; returns the outcome. `seats[i]` is the engine in seat i.
 fn play(seed: u64, config: GameConfig, seats: &[Engine], effort: Effort) -> Outcome {
     let mut s = GameState::new_computer_game(seed, config).expect("valid config");
+    // What each seat has learned about the other's hand (two players).
+    let mut beliefs = [Beliefs::default(), Beliefs::default()];
     for ply in 0..3000u64 {
         if s.is_terminal() {
             return s.outcome();
         }
         let actor = s.actor_to_move();
-        let a = choose(&s, seats[actor.index()], effort, seed.wrapping_mul(1_000_003).wrapping_add(ply));
+        let seat = actor.index();
+        let a = choose(&s, seats[seat], effort, seed.wrapping_mul(1_000_003).wrapping_add(ply), &beliefs[seat.min(1)]);
+        let before = s.clone();
         s.apply(&a).expect("chosen move is legal");
+        if config.num_players == 2 {
+            beliefs[0].observe(PlayerId::P0, &before, &a, &s);
+            beliefs[1].observe(PlayerId::P1, &before, &a, &s);
+        }
     }
     Outcome::Draw // never seen; guards against an endless game
 }

@@ -75,11 +75,12 @@ export class SolverPool {
   }
 
   /**
-   * Run one search batch spread over the pool.
+   * Run one search batch spread over the pool. `beliefs` (optional) is what
+   * the opponent's play suggests they hold, from the engine's `opponent_beliefs`.
    * Resolves with { id, results, errors, timedOut, cancelled, elapsedMs }.
    * Never rejects.
    */
-  run({ state, determinizations, rollouts, maxDepth = 500, timeoutMs = 30000 }) {
+  run({ state, determinizations, rollouts, maxDepth = 500, timeoutMs = 30000, beliefs = null }) {
     this.cancel()
     if (this.disposed) {
       return Promise.resolve(this._outcome({ id: 0, errors: ['the solver has been shut down'] }))
@@ -111,7 +112,7 @@ export class SolverPool {
           slot.worker.postMessage({
             type: 'solve',
             id,
-            req: { state, determinizations: count, rollouts_per_determinization: rollouts, max_depth: maxDepth },
+            req: { state, determinizations: count, rollouts_per_determinization: rollouts, max_depth: maxDepth, beliefs },
           })
         })
       } catch (e) {

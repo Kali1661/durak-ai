@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::eval;
 use crate::policy::{self, Playout};
-use crate::{solve_exact_deal, Action, EngineError, ExactValue, GameState, Outcome, Phase, PlayerId, MAX_PLAYERS};
+use crate::{
+    solve_exact_deal, Action, Beliefs, EngineError, ExactValue, GameState, Outcome, Phase, PlayerId, MAX_PLAYERS,
+};
 
 /// Upper bounds accepted by [`solve`]; larger requests are rejected.
 pub const MAX_DETERMINIZATIONS: u32 = 2_000;
@@ -215,6 +217,15 @@ fn play_out(
     cutoff: bool,
     max_depth: u32,
 ) -> Result<([f64; MAX_PLAYERS], bool), EngineError> {
+    // Two players and the heuristic player: the same playout on a compact
+    // copy of the position, many times faster (see `endgame`).
+    if playout == Playout::Heuristic {
+        if let Some((v, cut_off)) = crate::endgame::fast_playout(s, rng, cutoff, max_depth) {
+            let mut value = [0.5; MAX_PLAYERS];
+            value[..2].copy_from_slice(&v);
+            return Ok((value, cut_off));
+        }
+    }
     let mut depth = 0u32;
     while !s.is_terminal() && depth < max_depth {
         if cutoff && s.stock.is_empty() && s.phase == Phase::Attacking && s.table.is_empty() {
@@ -289,6 +300,11 @@ pub struct SharedTree {
     root_actions: Vec<Action>,
     nodes: Vec<InfoNode>,
     iterations: u64,
+    /// What the opponent's play suggests they hold, if anything.
+    beliefs: Option<Beliefs>,
+    /// Two players and heuristic playouts: the same search on compact
+    /// positions, which does all the work instead (see `endgame`).
+    fast: Option<crate::endgame::FastTree>,
 }
 
 impl SharedTree {
@@ -301,16 +317,29 @@ impl SharedTree {
             root_actions: state.legal_actions(),
             nodes: vec![InfoNode::new()],
             iterations: 0,
+            beliefs: None,
+            fast: crate::endgame::FastTree::new(state, seed, perspective, params),
         }
+    }
+
+    /// Deal the hidden cards by these beliefs from now on.
+    pub fn set_beliefs(&mut self, beliefs: Option<Beliefs>) {
+        if let Some(fast) = &mut self.fast {
+            fast.set_beliefs(beliefs.clone());
+        }
+        self.beliefs = beliefs;
     }
 
     /// Playouts run so far.
     pub fn iterations(&self) -> u64 {
-        self.iterations
+        self.fast.as_ref().map_or(self.iterations, |fast| fast.iterations())
     }
 
     /// Run `iterations` more playouts.
     pub fn run(&mut self, iterations: u32) -> Result<(), EngineError> {
+        if let Some(fast) = &mut self.fast {
+            return fast.run(iterations);
+        }
         let SolveParams { max_depth, exploration, playout, cutoff, .. } = self.params;
         let cutoff = cutoff && self.state.num_players() == 2;
         let candidates = usize::from(self.params.candidates);
@@ -319,7 +348,7 @@ impl SharedTree {
         let rng = &mut self.rng;
 
         for _ in 0..iterations {
-            let mut s = self.state.determinize(self.perspective, rng)?;
+            let mut s = self.state.determinize_with(self.perspective, rng, self.beliefs.as_ref())?;
             let mut path = vec![0usize];
             let mut cur = 0usize;
 
@@ -400,6 +429,9 @@ impl SharedTree {
     /// (playouts, value sum for the advised player, cut-off playouts) for
     /// every root action so far, in `legal_actions()` order.
     fn totals(&self) -> Vec<(u64, f64, u64)> {
+        if let Some(fast) = &self.fast {
+            return fast.totals();
+        }
         let p = self.perspective.index();
         self.root_actions
             .iter()
@@ -426,7 +458,7 @@ impl SharedTree {
                 cutoffs: u32::try_from(cutoffs).unwrap_or(u32::MAX),
             })
             .collect();
-        MctsEval { actions, total_rollouts: u32::try_from(self.iterations).unwrap_or(u32::MAX) }
+        MctsEval { actions, total_rollouts: u32::try_from(self.iterations()).unwrap_or(u32::MAX) }
     }
 }
 
@@ -593,6 +625,7 @@ pub struct Search {
     tree: Option<SharedTree>,
     /// What the tree had found when it was last reported.
     reported: Vec<(u64, f64, u64)>,
+    beliefs: Option<Beliefs>,
 }
 
 impl Search {
@@ -621,7 +654,15 @@ impl Search {
             root_actions,
             deals: 0,
             tree: None,
+            beliefs: None,
         })
+    }
+
+    /// Deal the opponent's hidden cards by what their play suggests they
+    /// hold (see [`Beliefs`]). Set before the first [`Search::run`].
+    pub fn with_beliefs(mut self, beliefs: Option<Beliefs>) -> Self {
+        self.beliefs = beliefs;
+        self
     }
 
     /// The position being searched.
@@ -655,7 +696,7 @@ impl Search {
         while deals_left > 0 && (self.exact || !params.shared_tree) {
             let det_seed = splitmix64(self.seed ^ splitmix64(self.deals));
             let mut rng = StdRng::seed_from_u64(det_seed);
-            let det_state = self.state.determinize(self.perspective, &mut rng)?;
+            let det_state = self.state.determinize_with(self.perspective, &mut rng, self.beliefs.as_ref())?;
 
             // Few cards left to draw: this deal may be small enough to solve.
             // Each solved move counts as many visits as a deal's playouts, valued
@@ -708,7 +749,12 @@ impl Search {
             // One tree, a fresh deal for every playout: as many playouts as the
             // separate trees would have had together.
             let (state, perspective, seed) = (&self.state, self.perspective, self.seed);
-            let tree = self.tree.get_or_insert_with(|| SharedTree::new(state, splitmix64(seed), perspective, &params));
+            let beliefs = &self.beliefs;
+            let tree = self.tree.get_or_insert_with(|| {
+                let mut tree = SharedTree::new(state, splitmix64(seed), perspective, &params);
+                tree.set_beliefs(beliefs.clone());
+                tree
+            });
             tree.run(deals_left.saturating_mul(rollouts))?;
             let now = tree.totals();
             for ((total, new), old) in totals.iter_mut().zip(&now).zip(&self.reported) {

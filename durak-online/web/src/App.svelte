@@ -481,6 +481,21 @@
     return problem
   }
 
+  /**
+   * What the opponent's moves so far suggest about their hand (two-player
+   * games): the search then deals the hidden cards accordingly instead of
+   * purely at random. Null when there is nothing to go on.
+   */
+  function opponentBeliefs() {
+    if (!rec || gs?.hands?.length !== 2) return null
+    try {
+      return engine.opponent_beliefs(rec.initial, rec.steps.map(s => ({ state: s.state, action: s.action ?? null })))
+    } catch (e) {
+      console.warn('Could not work out what the opponent may hold; searching without it.', e)
+      return null
+    }
+  }
+
   /** Rank my legal moves. `more` continues the current search instead of restarting it. */
   async function startHints(more = false) {
     if (!settings.showHints || !gs || actorOf(gs) !== ME) return
@@ -488,6 +503,7 @@
     const run = ++hintRun
     const state = gs
     const moves = legal
+    const beliefs = opponentBeliefs()
     if (!more || !hintTally) hintTally = createTally()
     const tally = hintTally
     if (exact.epoch !== at) startExact()
@@ -513,6 +529,7 @@
         determinizations: settings.hintDeterminizations,
         rollouts,
         timeoutMs: 60000,
+        beliefs,
       })
       if (stale() || res.cancelled) return
       const problem = absorb(tally, res)
