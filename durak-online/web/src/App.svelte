@@ -390,11 +390,14 @@
     if (!gs || outcome.status !== 'in_progress') return
     const who = actorOf(gs)
 
-    // An attacker who may add more cards before the answer: assume they add
-    // none, so play goes on at once. A side button takes it back ("add another
-    // card" for me, "they added more cards" for a real opponent). Computer
-    // opponents decide for themselves.
-    if (gs.phase === 'Adding' && !holdAdding && (who === ME || !isPlay())) {
+    // An attacker who may add more cards before the answer. A real opponent
+    // is assumed to add none, so play goes on at once; a side button takes it
+    // back ("they added more cards"). The same goes for me when I hold nothing
+    // I could add. When I do, it is my decision like any other - laying two
+    // cards of a rank at once can win where one at a time loses - so the
+    // suggestions cover it. Computer opponents decide for themselves.
+    const iCanAdd = who === ME && legal.some(a => a.type !== 'let_defend')
+    if (gs.phase === 'Adding' && !holdAdding && !iCanAdd && (who === ME || !isPlay())) {
       if (perform({ type: 'let_defend' }, { snapshot: true, suffix: who === ME ? '' : ' (assumed)' })) {
         assumedAt = epoch
         assumedBy = who
