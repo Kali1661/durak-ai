@@ -22,9 +22,9 @@ const DEFAULT_ROLLOUTS: u32 = 1000;
 const DEFAULT_MAX_DEPTH: u32 = 500;
 /// The browser engine stops at 6 million positions for memory; natively there is room for more.
 const MAX_EXACT_NODES: u64 = 12_000_000;
-/// The app sizes exact searches for the browser engine; this one gets through
-/// about twice as many positions in the same time.
-const EXACT_SPEEDUP: u64 = 2;
+/// The app sizes exact searches for the browser engine's speed, which the
+/// native engine matches (measured: within a few percent).
+const EXACT_SPEEDUP: u64 = 1;
 
 /// The same request the browser engine takes (see `durak-wasm`).
 #[derive(Deserialize)]

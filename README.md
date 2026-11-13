@@ -84,12 +84,16 @@ lets an attacker lay down several cards at once.
 
 Suggestions come from a Monte Carlo tree search. The cards you cannot see are
 dealt at random many times; each deal is searched and played out to the end.
+In those simulated games the players follow sensible habits - lead and throw
+in low cards, beat with the cheapest card, keep trumps while the stock is large
+and take a small pile rather than spend one - with an occasional random move.
+(Purely random simulated players made the search spend trumps too readily.)
 The percentage shown next to a move is its **score**: how often, across those
 simulated games, you did not end up as the durak (a draw counts as not losing;
 a simulation cut off before the end counts as half).
 
 Treat the score as a way to compare moves, not as an exact probability. It
-depends on random deals and largely random play-outs, it varies from run to
+depends on random deals and simplified simulated play, it varies from run to
 run, and the search can be wrong. The number of simulations behind each score
 is shown so you can judge how settled it is, and "Search longer" adds more.
 **Calculated results.** In a two-player game, once no cards are hidden - the
@@ -125,12 +129,31 @@ npm run dev
 then open <http://localhost:5173>. Run each line on its own and check it
 worked before the next. After installing a tool, open a new terminal window.
 
+**Optional: the native program.** The engine normally runs inside the browser
+as WebAssembly. It can also run as an ordinary program on your computer. The
+sampling search is about as fast either way; the exact endgame calculation
+gets more memory there, so it can settle larger positions. Build it once:
+
+```bash
+cd durak-ai/durak-online/web
+npm run build
+cd ..
+cargo build --release -p durak-native
+```
+
+Then start `durak-online/target/release/durak-ai.exe` (double-click it on
+Windows). It opens the same app in your browser at <http://127.0.0.1:8787>,
+and the searches run in the program; the suggestions panel shows
+*Engine: native*. Close its window to stop it. Games and recordings are stored
+per address, so the ones made at `localhost:5173` do not show up there.
+
 ## Project layout
 
 ```
 durak-online/
 ├── durak-core/   Rust engine: rules, validation, search, solver  (tests in tests/)
 ├── durak-wasm/   WebAssembly bindings
+├── durak-native/ the native program: serves the app, runs its searches
 └── web/          Svelte app                                      (tests in tests/)
 ```
 

@@ -90,12 +90,16 @@ viac kariet.
 
 Odporúčania pochádzajú z vyhľadávania Monte Carlo (MCTS). Karty, ktoré nevidíš,
 sa mnohokrát náhodne rozdajú; každé rozdanie sa prehľadá a dohrá do konca.
+V týchto simulovaných hrách hráči hrajú rozumne - vynášajú a prihadzujú nízke
+karty, bijú najlacnejšou kartou, kým je v balíčku veľa kariet, šetria tromfy a
+radšej zoberú malú kôpku - a občas zahrajú náhodný ťah. (Úplne náhodní
+simulovaní hráči viedli vyhľadávanie k zbytočnému míňaniu tromfov.)
 Percento pri ťahu je jeho **skóre**: ako často si v týchto simulovaných hrách
 neskončil ako durak (remíza sa počíta ako neprehra; simulácia prerušená pred
 koncom sa počíta ako polovica).
 
 Skóre ber ako spôsob porovnania ťahov, nie ako presnú pravdepodobnosť. Závisí
-od náhodných rozdaní a z veľkej časti náhodného dohrávania, medzi behmi sa
+od náhodných rozdaní a zjednodušeného simulovaného hrania, medzi behmi sa
 mení a vyhľadávanie sa môže mýliť. Pri každom skóre je uvedený počet simulácií,
 aby si vedel posúdiť, nakoľko je ustálené; tlačidlo „Search longer" ich pridá.
 **Vypočítané výsledky.** V hre dvoch hráčov, keď už nie sú žiadne skryté karty -
@@ -132,12 +136,31 @@ npm run dev
 a otvor <http://localhost:5173>. Každý riadok spusti samostatne a pred ďalším
 over, že prebehol. Po inštalácii nástroja otvor nové okno terminálu.
 
+**Voliteľne: natívny program.** Engine bežne beží v prehliadači ako
+WebAssembly. Môže bežať aj ako bežný program v počítači. Vyhľadávanie je v oboch
+prípadoch zhruba rovnako rýchle; presný výpočet konca hry tam má viac pamäte,
+takže dopočíta aj väčšie pozície. Raz ho zostav:
+
+```bash
+cd durak-ai/durak-online/web
+npm run build
+cd ..
+cargo build --release -p durak-native
+```
+
+Potom spusti `durak-online/target/release/durak-ai.exe` (vo Windows dvojklikom).
+Otvorí tú istú aplikáciu v prehliadači na <http://127.0.0.1:8787> a
+vyhľadávanie beží v programe; panel odporúčaní ukazuje *Engine: native*.
+Program zastavíš zatvorením jeho okna. Hry a nahrávky sa ukladajú podľa
+adresy, takže tie z `localhost:5173` sa tam neukážu.
+
 ## Štruktúra projektu
 
 ```
 durak-online/
 ├── durak-core/   engine v Ruste: pravidlá, validácia, vyhľadávanie  (testy v tests/)
 ├── durak-wasm/   väzby pre WebAssembly
+├── durak-native/ natívny program: servíruje aplikáciu, počíta jej vyhľadávanie
 └── web/          aplikácia vo Svelte                                (testy v tests/)
 ```
 
