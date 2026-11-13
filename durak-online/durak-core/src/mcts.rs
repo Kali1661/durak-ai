@@ -171,40 +171,7 @@ pub fn mcts_evaluate_actions(
             path.push(child);
         }
 
-        // Playout: random or heuristic players (see `policy`). With `cutoff`,
-        // a two-player playout stops once the stock is empty and the hands
-        // are scored instead (see `eval`).
-        let mut depth = 0u32;
-        let mut scored = None;
-        while !s.is_terminal() && depth < max_depth {
-            if cutoff && s.stock.is_empty() && s.phase == Phase::Attacking && s.table.is_empty() {
-                scored = Some(eval::attacker_wins(&s));
-                break;
-            }
-            let acts = s.legal_actions();
-            if acts.is_empty() {
-                return internal("a running game has no legal actions");
-            }
-            let i = policy::choose(&s, &acts, playout, &mut rng);
-            s.execute(&acts[i])?;
-            depth += 1;
-        }
-
-        let mut value = [0.5; MAX_PLAYERS];
-        let mut cut_off = false;
-        if let Some(p) = scored {
-            value[s.attacker.index()] = p;
-            value[s.defender.index()] = 1.0 - p;
-        } else {
-            match s.outcome() {
-                Outcome::InProgress => cut_off = true,
-                Outcome::Draw => value = [1.0; MAX_PLAYERS],
-                Outcome::Durak { player } => {
-                    value = [1.0; MAX_PLAYERS];
-                    value[player.index()] = 0.0;
-                }
-            }
-        }
+        let (value, cut_off) = play_out(&mut s, &mut rng, playout, cutoff, max_depth)?;
 
         for idx in path {
             let node = &mut nodes[idx];
@@ -234,6 +201,182 @@ pub fn mcts_evaluate_actions(
         .collect();
 
     Ok(MctsEval { actions, total_rollouts: rollouts })
+}
+
+/// Play `s` on from here (random or heuristic players, see `policy`) and
+/// value the result per player: 1 = not the durak, 0 = the durak, 1/2 = cut
+/// off at `max_depth` (also returned as `true`). With `cutoff`, a two-player
+/// playout stops once the stock is empty and the hands are scored instead
+/// (see `eval`).
+fn play_out(
+    s: &mut GameState,
+    rng: &mut StdRng,
+    playout: Playout,
+    cutoff: bool,
+    max_depth: u32,
+) -> Result<([f64; MAX_PLAYERS], bool), EngineError> {
+    let mut depth = 0u32;
+    while !s.is_terminal() && depth < max_depth {
+        if cutoff && s.stock.is_empty() && s.phase == Phase::Attacking && s.table.is_empty() {
+            let p = eval::attacker_wins(s);
+            let mut value = [0.5; MAX_PLAYERS];
+            value[s.attacker.index()] = p;
+            value[s.defender.index()] = 1.0 - p;
+            return Ok((value, false));
+        }
+        let acts = s.legal_actions();
+        if acts.is_empty() {
+            return internal("a running game has no legal actions");
+        }
+        let i = policy::choose(s, &acts, playout, rng);
+        s.execute(&acts[i])?;
+        depth += 1;
+    }
+    Ok(match s.outcome() {
+        Outcome::InProgress => ([0.5; MAX_PLAYERS], true),
+        Outcome::Draw => ([1.0; MAX_PLAYERS], false),
+        Outcome::Durak { player } => {
+            let mut value = [1.0; MAX_PLAYERS];
+            value[player.index()] = 0.0;
+            (value, false)
+        }
+    })
+}
+
+// ── One tree over many deals ────────────────────────────────────────────────
+
+/// A node of the shared tree: a sequence of moves, whatever the deal.
+struct InfoNode {
+    value: [f64; MAX_PLAYERS],
+    visits: u32,
+    cutoffs: u32,
+    children: Vec<InfoChild>,
+}
+
+struct InfoChild {
+    action: Action,
+    node: usize,
+    /// How often this move was available when its parent was visited (it
+    /// depends on the deal); exploration is measured against this.
+    available: u32,
+}
+
+impl InfoNode {
+    fn new() -> Self {
+        InfoNode { value: [0.0; MAX_PLAYERS], visits: 0, cutoffs: 0, children: Vec::new() }
+    }
+}
+
+/// Search one tree for the player to move in the real `state`, hidden cards
+/// and all: every iteration deals the hidden cards afresh (consistent with
+/// what `perspective` knows), follows the tree using only moves legal in that
+/// deal, and plays out. Statistics are pooled across deals at every node, so
+/// a player's choices in the tree cannot depend on cards they cannot see.
+/// (Single-observer information-set MCTS, with max^n values.)
+pub fn shared_tree_evaluate(
+    state: &GameState,
+    seed: u64,
+    perspective: PlayerId,
+    iterations: u32,
+    params: &SolveParams,
+) -> Result<MctsEval, EngineError> {
+    let SolveParams { max_depth, exploration, playout, cutoff, .. } = *params;
+    let cutoff = cutoff && state.num_players() == 2;
+    let candidates = usize::from(params.candidates);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let root_actions = state.legal_actions();
+    let mut nodes = vec![InfoNode::new()];
+
+    for _ in 0..iterations {
+        let mut s = state.determinize(perspective, &mut rng)?;
+        let mut path = vec![0usize];
+        let mut cur = 0usize;
+
+        while !s.is_terminal() {
+            let mut legal = s.legal_actions();
+            if legal.is_empty() {
+                return internal("a running game has no legal actions");
+            }
+            let prune = cur != 0
+                && candidates > 0
+                && legal.len() > candidates
+                && s.stock.len() >= usize::from(params.candidates_min_stock);
+            if prune || playout == Playout::Heuristic {
+                // Untried moves are expanded best-looking first.
+                legal.sort_by_cached_key(|a| policy::move_cost(&s, a));
+                if prune {
+                    legal.truncate(candidates);
+                }
+            }
+            // Which known moves are available in this deal, and the first untried one.
+            let mut here: Vec<usize> = Vec::with_capacity(legal.len());
+            let mut untried = None;
+            for a in legal {
+                match nodes[cur].children.iter().position(|c| c.action.same_move(&a)) {
+                    Some(ci) => here.push(ci),
+                    None if untried.is_none() => untried = Some(a),
+                    None => {}
+                }
+            }
+            for &ci in &here {
+                nodes[cur].children[ci].available += 1;
+            }
+            if let Some(action) = untried {
+                s.execute(&action)?;
+                let node = nodes.len();
+                nodes.push(InfoNode::new());
+                nodes[cur].children.push(InfoChild { action, node, available: 1 });
+                path.push(node);
+                break;
+            }
+            let actor = s.actor_to_move().index();
+            let mut best = here[0];
+            let mut best_uct = f64::NEG_INFINITY;
+            for &ci in &here {
+                let c = &nodes[cur].children[ci];
+                let n = &nodes[c.node];
+                let visits = f64::from(n.visits.max(1));
+                let uct = n.value[actor] / visits + exploration * (f64::from(c.available).ln() / visits).sqrt();
+                if uct > best_uct {
+                    best_uct = uct;
+                    best = ci;
+                }
+            }
+            let child = &nodes[cur].children[best];
+            let next = child.node;
+            s.execute(&child.action.clone())?;
+            cur = next;
+            path.push(cur);
+        }
+
+        let (value, cut_off) = play_out(&mut s, &mut rng, playout, cutoff, max_depth)?;
+        for idx in path {
+            let node = &mut nodes[idx];
+            node.visits += 1;
+            node.cutoffs += u32::from(cut_off);
+            for (total, v) in node.value.iter_mut().zip(value) {
+                *total += v;
+            }
+        }
+    }
+
+    let p = perspective.index();
+    let actions = root_actions
+        .into_iter()
+        .map(|action| {
+            let child = nodes[0].children.iter().find(|c| c.action.same_move(&action)).map(|c| &nodes[c.node]);
+            match child {
+                Some(n) if n.visits > 0 => ActionEval {
+                    action,
+                    visits: n.visits,
+                    score: (n.value[p] / f64::from(n.visits)) as f32,
+                    cutoffs: n.cutoffs,
+                },
+                _ => ActionEval { action, visits: 0, score: 0.0, cutoffs: 0 },
+            }
+        })
+        .collect();
+    Ok(MctsEval { actions, total_rollouts: iterations })
 }
 
 /// Search effort for [`solve`].
@@ -273,6 +416,10 @@ pub struct SolveParams {
     pub candidates: u8,
     #[serde(default)]
     pub candidates_min_stock: u8,
+    /// Search one tree over all the deals instead of one tree per deal (see
+    /// [`shared_tree_evaluate`]); exact solving of deals does not apply then.
+    #[serde(default)]
+    pub shared_tree: bool,
 }
 
 impl Default for SolveParams {
@@ -289,6 +436,7 @@ impl Default for SolveParams {
             cutoff: false,
             candidates: 0,
             candidates_min_stock: 0,
+            shared_tree: false,
         }
     }
 }
@@ -375,7 +523,24 @@ pub fn solve(state: &GameState, params: SolveParams, seed: u64) -> Result<SolveR
     // (visits, value sum, cutoffs) per root action.
     let mut totals = vec![(0u64, 0f64, 0u64); root_actions.len()];
 
-    for i in 0..params.determinizations {
+    // The newer options are tuned for, and only used in, two-player games;
+    // three-player games search as before.
+    let mut params = params;
+    if state.num_players() != 2 {
+        params.shared_tree = false;
+        params.candidates = 0;
+        params.cutoff = false;
+    }
+    if params.shared_tree {
+        // One tree, a fresh deal for every playout: as many playouts as the
+        // separate trees would have had together.
+        let iterations = params.determinizations.saturating_mul(params.rollouts);
+        let eval = shared_tree_evaluate(state, splitmix64(seed), perspective, iterations, &params)?;
+        for (slot, e) in eval.actions.into_iter().enumerate() {
+            totals[slot] = (u64::from(e.visits), f64::from(e.visits) * f64::from(e.score), u64::from(e.cutoffs));
+        }
+    }
+    for i in 0..if params.shared_tree { 0 } else { params.determinizations } {
         let det_seed = splitmix64(seed ^ splitmix64(u64::from(i)));
         let mut rng = StdRng::seed_from_u64(det_seed);
         let det_state = state.determinize(perspective, &mut rng)?;

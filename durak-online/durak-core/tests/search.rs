@@ -228,3 +228,27 @@ fn pruning_never_drops_my_own_moves() {
     let plain = solve(&s, SolveParams { determinizations: 2, rollouts: 300, ..SolveParams::default() }, 1).unwrap();
     assert_ne!(r.actions, plain.actions);
 }
+
+#[test]
+fn one_tree_over_all_deals() {
+    for players in [2, 3] {
+        let config = GameConfig { deck_size: 36, num_players: players, ..GameConfig::default() };
+        let mut s = GameState::new_computer_game(11, config).unwrap();
+        // A few moves in, so there is a table and a defender to think about.
+        for _ in 0..3 {
+            let a = policy::heuristic_action(&s).unwrap();
+            s.apply(&a).unwrap();
+        }
+        let p = SolveParams { determinizations: 4, rollouts: 250, shared_tree: true, ..SolveParams::default() };
+        let r = solve(&s, p, 5).unwrap();
+        // Every playout went through exactly one of my moves.
+        assert_eq!(r.actions.iter().map(|a| a.visits).sum::<u32>(), 1000);
+        assert_eq!(r.total_visits, 1000);
+        assert!(r.actions.iter().all(|a| (0.0..=1.0).contains(&a.score)));
+        // Same seed, same answer.
+        assert_eq!(solve(&s, p, 5).unwrap().actions, r.actions);
+        // Two players only: with three the option is ignored.
+        let separate = solve(&s, SolveParams { shared_tree: false, ..p }, 5).unwrap();
+        assert_eq!(separate.actions == r.actions, players == 3);
+    }
+}

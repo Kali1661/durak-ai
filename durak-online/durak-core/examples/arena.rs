@@ -8,7 +8,7 @@
 //! Engines: `random` (any legal move), `rules` (the heuristic playout player
 //! on its own), `mcts` (search with random playouts, as before) and `mcts-h`
 //! (search with heuristic playouts). Search settings follow a colon, e.g.
-//! `mcts-h:prior=1,xnodes=100000,xstock=6,c=1.41,cut=1,d=64,p=250,k=3,kstock=6` (see `engine`;
+//! `mcts-h:prior=1,xnodes=100000,xstock=6,c=1.41,cut=1,d=64,p=250,k=3,kstock=6,tree=1` (see `engine`;
 //! `d` and `p` give that engine its own deals and playouts per search).
 //!
 //! `match` plays every deal once per seat for A, so both sides get the same
@@ -51,6 +51,8 @@ struct Search {
     /// least `kstock` cards are left to draw.
     candidates: u8,
     kstock: u8,
+    /// One tree over all deals.
+    tree: bool,
 }
 
 /// `random`, `rules`, `mcts` (random playouts), `mcts-h` (heuristic
@@ -64,7 +66,7 @@ fn engine(spec: &str) -> Engine {
         "mcts-h" => Playout::Heuristic,
         other => panic!("unknown engine {other}; use random, rules, mcts or mcts-h"),
     };
-    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0 };
+    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false };
     for kv in opts.split(',').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').expect("settings look like key=value");
         match k {
@@ -77,6 +79,7 @@ fn engine(spec: &str) -> Engine {
             "p" => e.playouts = v.parse().unwrap(),
             "k" => e.candidates = v.parse().unwrap(),
             "kstock" => e.kstock = v.parse().unwrap(),
+            "tree" => e.tree = v == "1",
             other => panic!("unknown setting {other}"),
         }
     }
@@ -122,7 +125,7 @@ fn exact_choice(state: &GameState, effort: Effort, seed: u64) -> Option<Action> 
         return Some(r.actions[0].action.clone());
     }
     // The same search for both engines here, so the endgame is a level field.
-    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0 };
+    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false };
     Some(search(state, plain, effort, seed, Some(&safe)))
 }
 
@@ -138,6 +141,7 @@ fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<
         cutoff: e.cutoff,
         candidates: e.candidates,
         candidates_min_stock: e.kstock,
+        shared_tree: e.tree,
         ..SolveParams::default()
     };
     let r = solve(state, params, seed).expect("search runs");
