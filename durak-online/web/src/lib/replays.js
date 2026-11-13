@@ -13,6 +13,10 @@ import { ME } from './game.js'
 export const REPLAY_VERSION = 1
 export const MAX_REPLAYS = 500
 export const RESULTS = ['win', 'loss', 'draw', 'unfinished']
+/** How strong the opponent seemed - my own rating of a real game. */
+export const OPPONENTS = ['weak', 'average', 'strong']
+/** Who ended a game early by giving up. */
+export const GAVE_UP = ['me', 'opponent']
 
 const DB_NAME = 'durak_ai_replays'
 const DB_VERSION = 1
@@ -120,6 +124,8 @@ export function metaOf(rec) {
     playerTypes: rec.playerTypes || null,
     result: RESULTS.includes(rec.result) ? rec.result : 'unfinished',
     userResult: RESULTS.includes(rec.userResult) ? rec.userResult : null,
+    gaveUp: GAVE_UP.includes(rec.gaveUp) ? rec.gaveUp : null,
+    opponent: OPPONENTS.includes(rec.opponent) ? rec.opponent : null,
     durak: rec.durak ?? null,
     moves: rec.steps.filter(s => s.action).length,
     myMoves: mine.length,
@@ -170,6 +176,17 @@ export function computeStats(metas) {
     tables.set(label, [...(tables.get(label) || []), m])
   }
   for (const [label, items] of [...tables].sort((a, b) => a[0].localeCompare(b[0]))) groups.push(group(label, items))
+
+  // Real games by how strong I rated the opponent.
+  const real = list.filter(m => m.mode === 'analyse')
+  if (real.some(m => m.opponent)) {
+    for (const level of [...OPPONENTS].reverse()) {
+      const items = real.filter(m => m.opponent === level)
+      if (items.length) groups.push(group(`Real games, ${level} opponent`, items))
+    }
+    const unrated = real.filter(m => !m.opponent)
+    if (unrated.length) groups.push(group('Real games, opponent not rated', unrated))
+  }
 
   // Did following the suggestions go with better results?
   const rated = list.filter(m => m.hinted >= 5 && effectiveResult(m) !== 'unfinished')
@@ -264,13 +281,40 @@ export async function clearReplays() {
   await done(tx)
 }
 
-/** Record what really happened when the app's result is wrong (null removes the correction). */
-export async function setUserResult(id, userResult) {
+/**
+ * The result of a game that ended by someone giving up: a win when it was the
+ * opponent, a loss when it was me. Returns the recording with both noted.
+ */
+export function withGivingUp(rec, who) {
+  if (!GAVE_UP.includes(who)) return rec
+  return { ...rec, userResult: who === 'opponent' ? 'win' : 'loss', gaveUp: who }
+}
+
+/** Note how strong the opponent seemed (anything else removes the rating). */
+export function withOpponent(rec, level) {
+  const { opponent, ...rest } = rec
+  return OPPONENTS.includes(level) ? { ...rest, opponent: level } : rest
+}
+
+/**
+ * Record what really happened when the app's result is wrong (null removes
+ * the correction). `gaveUp` says who gave up, if that is how it ended.
+ */
+export async function setUserResult(id, userResult, gaveUp = null) {
   const rec = await loadReplay(id)
   if (!rec) return
   if (RESULTS.includes(userResult)) rec.userResult = userResult
   else delete rec.userResult
+  if (rec.userResult && GAVE_UP.includes(gaveUp)) rec.gaveUp = gaveUp
+  else delete rec.gaveUp
   await saveReplay(rec)
+}
+
+/** Rate the opponent of a saved game (null removes the rating). */
+export async function setOpponent(id, level) {
+  const rec = await loadReplay(id)
+  if (!rec) return
+  await saveReplay(withOpponent(rec, level))
 }
 
 /** Every full recording, newest first - for exporting. */

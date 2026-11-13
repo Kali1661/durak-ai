@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   addStep, computeStats, effectiveResult, finalize, hintSnapshot, isRecording, metaOf, newRecording, resultOf, truncate,
+  withGivingUp, withOpponent,
 } from '../src/lib/replays.js'
 
 const state = (n = 2) => ({ config: { deck_size: 36, num_players: n, reflecting: true, classic_ending: true }, hands: Array.from({ length: n }, () => []) })
@@ -65,7 +66,9 @@ test('the summary counts moves and followed suggestions', () => {
     { ...meta, names: undefined, playerTypes: undefined },
     {
       v: 1, id: 'g1', mode: 'analyse', startedAt: 1000, endedAt: 5000, players: 2, deck: 36, reflecting: true,
-      classic: true, names: undefined, playerTypes: undefined, result: 'win', userResult: null, durak: 'P1',
+      classic: true, names: undefined, playerTypes: undefined, result: 'win', userResult: null,
+    gaveUp: null,
+    opponent: null, durak: 'P1',
       moves: 4, myMoves: 3, hinted: 2, followed: 1,
     },
   )
@@ -108,4 +111,30 @@ test('statistics cope with no games', () => {
   assert.equal(stats.followRate, null)
   assert.deepEqual(stats.groups, [])
   assert.deepEqual(computeStats(null).recent, [])
+})
+
+test('giving up and the opponent rating are kept with the game and counted', () => {
+  // Left before the end: unfinished, unless someone gave up.
+  const left = finalize(fresh(), { status: 'in_progress' })
+  assert.equal(effectiveResult(metaOf(left)), 'unfinished')
+  const won = metaOf(finalize(withGivingUp(fresh(), 'opponent'), { status: 'in_progress' }))
+  assert.equal(effectiveResult(won), 'win')
+  assert.equal(won.gaveUp, 'opponent')
+  const lost = metaOf(finalize(withGivingUp(fresh(), 'me'), { status: 'in_progress' }))
+  assert.equal(effectiveResult(lost), 'loss')
+  assert.equal(withGivingUp(left, 'nobody'), left)
+
+  const rated = withOpponent(fresh(), 'strong')
+  assert.equal(metaOf(rated).opponent, 'strong')
+  assert.equal('opponent' in withOpponent(rated, null), false, 'a rating can be removed')
+  assert.equal(metaOf(withOpponent(fresh(), 'godlike')).opponent, null)
+
+  const game = (id, opponent, result) => ({ ...metaOf(withOpponent(fresh({ id }), opponent)), result })
+  const stats = computeStats([game('a', 'strong', 'loss'), game('b', 'strong', 'win'), game('c', 'weak', 'win'), game('d', null, 'win')])
+  const row = label => stats.groups.find(g => g.label === label)
+  assert.equal(row('Real games, strong opponent').winRate, 0.5)
+  assert.equal(row('Real games, weak opponent').wins, 1)
+  assert.equal(row('Real games, opponent not rated').games, 1)
+  // No ratings at all: no such rows.
+  assert.equal(computeStats([game('e', null, 'win')]).groups.some(g => g.label.includes('opponent')), false)
 })

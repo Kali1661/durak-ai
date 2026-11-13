@@ -22,7 +22,8 @@
   import { actionKey, addResult, createTally, pickBest, summarize, withExact } from './lib/aggregate.js'
   import { ExactSolver, exactNodeBudget } from './lib/exact-solver.js'
   import { SolverPool, friendlySolverError } from './lib/solver-pool.js'
-  import { addStep, finalize, hintSnapshot, isRecording, newRecording, saveReplay, truncate } from './lib/replays.js'
+  import { addStep, finalize, hintSnapshot, isRecording, newRecording, saveReplay, truncate, withGivingUp, withOpponent } from './lib/replays.js'
+  import OpponentRating from './components/OpponentRating.svelte'
   import initWasm, * as engine from './wasm/durak_wasm.js'
 
   // ───────────────────────────────────────────────────────────────────────
@@ -710,11 +711,27 @@
     commit(next, { line: `New game. ${first === 'You' ? 'You attack' : `${first} attacks`} first.` })
   }
 
-  /** Leave the current game and go back to the setup screen. */
-  function abandonGame() {
+  /** Note how strong the opponent of this real game seems; kept with its recording. */
+  function rateOpponent(level) {
+    if (!rec) return
+    rec = withOpponent(rec, level)
+    saveGame()
+    // A finished game is already in the Games list: update it there too.
+    if (over) storeRecording()
+  }
+
+  /**
+   * Leave the current game and go back to the setup screen. `gaveUp` ('me' or
+   * 'opponent') records a real game that ended early as a loss or a win.
+   */
+  function abandonGame(gaveUp = null) {
     newGameDialog?.close()
-    // A game left before the end is still kept, marked as unfinished.
-    if (gs && outcome.status === 'in_progress') storeRecording()
+    // A game left before the end is still kept - as unfinished, unless
+    // someone gave up.
+    if (gs && outcome.status === 'in_progress') {
+      if (rec) rec = withGivingUp(rec, gaveUp)
+      storeRecording()
+    }
     cancelPending()
     gs = null
     rec = null
@@ -1142,7 +1159,10 @@
               <section class="panel" aria-labelledby="over-title">
                 <h2 id="over-title" class="panel-title">Game over</h2>
                 <p class="mt-2 text-sm">{statusText.replace('Game over: ', '')}</p>
-                <button type="button" class="btn btn-primary mt-4 w-full" on:click={abandonGame}>New game</button>
+                {#if rec && !isPlay()}
+                  <div class="mt-3"><OpponentRating value={rec.opponent || null} on:change={e => rateOpponent(e.detail)} /></div>
+                {/if}
+                <button type="button" class="btn btn-primary mt-4 w-full" on:click={() => abandonGame()}>New game</button>
               </section>
             {:else if myTurn && myUnknown === 0}
               <section class="panel" aria-labelledby="moves-title">
@@ -1267,11 +1287,22 @@
 <dialog class="sheet" bind:this={newGameDialog} aria-labelledby="ng-title">
   <div class="p-5">
     <h2 id="ng-title" class="panel-title">Leave this game?</h2>
-    <p class="mt-2 text-sm text-muted">The game in progress will be discarded and cannot be continued.</p>
-    <div class="mt-5 flex flex-wrap justify-end gap-2">
-      <button type="button" class="btn" on:click={() => newGameDialog.close()}>Keep playing</button>
-      <button type="button" class="btn btn-danger" on:click={abandonGame}>Discard and start new</button>
-    </div>
+    {#if rec && !isPlay()}
+      <p class="mt-2 text-sm text-muted">The game cannot be continued afterwards. It is kept in Games - say how it ended, so the statistics count it.</p>
+      <div class="mt-3"><OpponentRating value={rec.opponent || null} on:change={e => rateOpponent(e.detail)} /></div>
+      <div class="mt-5 grid gap-2">
+        <button type="button" class="btn" on:click={() => abandonGame('opponent')}>The opponent gave up - I won</button>
+        <button type="button" class="btn" on:click={() => abandonGame('me')}>I gave up - I lost</button>
+        <button type="button" class="btn btn-danger" on:click={() => abandonGame()}>Neither - leave it unfinished</button>
+        <button type="button" class="btn btn-primary" on:click={() => newGameDialog.close()}>Keep playing</button>
+      </div>
+    {:else}
+      <p class="mt-2 text-sm text-muted">The game in progress cannot be continued afterwards. It is kept in Games as unfinished.</p>
+      <div class="mt-5 flex flex-wrap justify-end gap-2">
+        <button type="button" class="btn" on:click={() => newGameDialog.close()}>Keep playing</button>
+        <button type="button" class="btn btn-danger" on:click={() => abandonGame()}>Leave and start new</button>
+      </div>
+    {/if}
   </div>
 </dialog>
 

@@ -2,7 +2,7 @@
   // My recorded games: statistics, the list, and a replay of any one of them.
   import ReplayViewer from './ReplayViewer.svelte'
   import {
-    allReplays, clearReplays, computeStats, deleteReplay, effectiveResult, listReplays, loadReplay, setUserResult,
+    allReplays, clearReplays, computeStats, deleteReplay, effectiveResult, listReplays, loadReplay, setOpponent, setUserResult,
   } from '../lib/replays.js'
 
   let metas = []
@@ -43,7 +43,15 @@
     viewing = rec
   })
   const remove = id => attempt(async () => { await deleteReplay(id); metas = await listReplays() })
-  const correct = (id, value) => attempt(async () => { await setUserResult(id, value || null); metas = await listReplays() })
+  // 'win' | 'loss' | 'draw', or 'win:opponent' / 'loss:me' when someone gave up.
+  const correct = (id, value) => attempt(async () => {
+    const [result, gaveUp] = (value || '').split(':')
+    await setUserResult(id, result || null, gaveUp || null)
+    metas = await listReplays()
+  })
+  const rate = (id, level) => attempt(async () => { await setOpponent(id, level || null); metas = await listReplays() })
+  const resultValue = m => (m.userResult ? (m.gaveUp ? `${m.userResult}:${m.gaveUp}` : m.userResult) : '')
+  const ending = m => (m.gaveUp === 'me' ? ' (I gave up)' : m.gaveUp === 'opponent' ? ' (opponent gave up)' : m.userResult ? ' (corrected)' : '')
   const clearAll = () => attempt(async () => { await clearReplays(); confirmClear = false; metas = [] })
 
   const exportAll = () => attempt(async () => {
@@ -150,7 +158,7 @@
         {@const r = effectiveResult(m)}
         <li class="rounded-xl border border-line p-3">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="chip {RESULT[r].cls}">{RESULT[r].text}{m.userResult ? ' (corrected)' : ''}</span>
+            <span class="chip {RESULT[r].cls}">{RESULT[r].text}{ending(m)}</span>
             <span class="text-sm font-semibold">{when(m.startedAt)}</span>
             <span class="text-xs text-muted">{m.mode === 'play' ? 'Against the computer' : 'Real game'}{versus(m) ? ` - vs ${versus(m)}` : ''}</span>
           </div>
@@ -161,13 +169,26 @@
             <button type="button" class="btn btn-sm btn-primary" on:click={() => open(m.id)}>Replay</button>
             <label class="flex items-center gap-1.5 text-xs text-muted">
               Real result
-              <select class="field min-h-[36px] w-auto py-1 text-xs" value={m.userResult || ''} on:change={e => correct(m.id, e.currentTarget.value)}>
+              <select class="field min-h-[36px] w-auto py-1 text-xs" value={resultValue(m)} on:change={e => correct(m.id, e.currentTarget.value)}>
                 <option value="">As recorded ({RESULT[m.result].text.toLowerCase()})</option>
                 <option value="win">I won</option>
+                <option value="win:opponent">I won - opponent gave up</option>
                 <option value="loss">I lost</option>
+                <option value="loss:me">I lost - I gave up</option>
                 <option value="draw">Draw</option>
               </select>
             </label>
+            {#if m.mode === 'analyse'}
+              <label class="flex items-center gap-1.5 text-xs text-muted">
+                Opponent
+                <select class="field min-h-[36px] w-auto py-1 text-xs" value={m.opponent || ''} on:change={e => rate(m.id, e.currentTarget.value)}>
+                  <option value="">Not rated</option>
+                  <option value="weak">Weak</option>
+                  <option value="average">Average</option>
+                  <option value="strong">Strong</option>
+                </select>
+              </label>
+            {/if}
             <button type="button" class="btn btn-sm ml-auto" on:click={() => remove(m.id)} aria-label="Delete the game from {when(m.startedAt)}">Delete</button>
           </div>
         </li>
