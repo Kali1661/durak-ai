@@ -33,7 +33,9 @@ dark theme.
 - a replay of any game, one move at a time, showing what the search suggested
   before each of your moves and whether you played it;
 - a way to set the real result when the app got it wrong, which the statistics
-  then use;
+  then use - including a game that ended because someone gave up;
+- a rating of how strong the opponent in a real game seemed (weak, average or
+  strong), with the statistics shown for each;
 - an export of all recordings as one JSON file.
 
 Recordings stay in this browser only. You choose how long suggestions search
@@ -96,6 +98,13 @@ Treat the score as a way to compare moves, not as an exact probability. It
 depends on random deals and simplified simulated play, it varies from run to
 run, and the search can be wrong. The number of simulations behind each score
 is shown so you can judge how settled it is, and "Search longer" adds more.
+
+In two-player games the search also reads the opponent's play: a player who
+stops adding cards probably holds none of the ranks on the table, one who
+picks up a card rather than beat it probably has nothing higher in that suit.
+Such cards are then dealt to their hand less often. And when you have laid a
+card and hold another you could lay with it, the suggestions cover that
+choice too - two cards of a rank at once can win where one at a time loses.
 **Calculated results.** In a two-player game, once no cards are hidden - the
 stock is empty or down to the trump card - the app stops estimating and works
 the result out by checking every line of play. Moves are then marked *Wins*,

@@ -36,7 +36,9 @@ sleduješ:
 - prehratie ľubovoľnej hry ťah po ťahu aj s tým, čo vyhľadávanie odporúčalo
   pred každým tvojím ťahom a či si to zahral;
 - možnosť nastaviť skutočný výsledok, keď ho aplikácia určila zle - štatistiky
-  potom počítajú s ním;
+  potom počítajú s ním - vrátane hry, ktorá sa skončila tým, že to niekto vzdal;
+- hodnotenie, aký silný sa zdal súper v skutočnej hre (slabý, priemerný alebo
+  silný), a štatistiky pre každé z nich;
 - export všetkých záznamov do jedného súboru JSON.
 
 Záznamy zostávajú iba v tomto prehliadači. Sám si volíš, ako dlho sa
@@ -102,6 +104,13 @@ Skóre ber ako spôsob porovnania ťahov, nie ako presnú pravdepodobnosť. Záv
 od náhodných rozdaní a zjednodušeného simulovaného hrania, medzi behmi sa
 mení a vyhľadávanie sa môže mýliť. Pri každom skóre je uvedený počet simulácií,
 aby si vedel posúdiť, nakoľko je ustálené; tlačidlo „Search longer" ich pridá.
+
+V hre dvoch hráčov vyhľadávanie číta aj súperovu hru: kto prestane prikladať,
+ten pravdepodobne nemá karty hodnôt, ktoré sú na stole; kto kartu radšej
+zoberie, než by ju pobil, pravdepodobne nemá vyššiu v tej istej farbe. Také
+karty sa mu potom rozdávajú zriedkavejšie. A keď si vyložil kartu a držíš
+ďalšiu, ktorú by si mohol priložiť hneď, odporúčania pokrývajú aj túto voľbu -
+dve karty rovnakej hodnoty naraz môžu vyhrať tam, kde po jednej prehrajú.
 **Vypočítané výsledky.** V hre dvoch hráčov, keď už nie sú žiadne skryté karty -
 balíček je prázdny alebo v ňom zostal len tromf - aplikácia prestane odhadovať
 a výsledok vypočíta preverením všetkých možných pokračovaní. Ťahy sú potom
