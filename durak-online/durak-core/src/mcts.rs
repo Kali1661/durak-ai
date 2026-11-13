@@ -68,19 +68,27 @@ struct Node {
 impl Node {
     /// A node for `state`. With priors, moves are tried best-looking first and
     /// carry a prior in (0, 1] from [`policy::move_cost`]; without, every
-    /// prior is 0 and moves are tried in move order.
-    fn new(state: &GameState, use_priors: bool) -> Self {
-        let actions = state.legal_actions();
-        let mut unexplored: Vec<(Action, f32)> = if use_priors {
-            let costs: Vec<i32> = actions.iter().map(|a| policy::move_cost(state, a)).collect();
-            let best = costs.iter().copied().min().unwrap_or(0);
-            let mut v: Vec<(Action, f32)> = actions
+    /// prior is 0 and moves are tried in move order. With `candidates` > 0
+    /// only that many moves - the cheapest by [`policy::move_cost`] - are
+    /// searched at all.
+    fn new(state: &GameState, use_priors: bool, candidates: usize) -> Self {
+        let mut actions = state.legal_actions();
+        let ranked = use_priors || (candidates > 0 && actions.len() > candidates);
+        let mut unexplored: Vec<(Action, f32)> = if ranked {
+            let mut costed: Vec<(i32, Action)> =
+                actions.drain(..).map(|a| (policy::move_cost(state, &a), a)).collect();
+            // Cheapest first; stable, so ties keep move order.
+            costed.sort_by_key(|(c, _)| *c);
+            if candidates > 0 {
+                costed.truncate(candidates);
+            }
+            let best = costed.first().map_or(0, |(c, _)| *c);
+            let mut v: Vec<(Action, f32)> = costed
                 .into_iter()
-                .zip(costs)
-                .map(|(a, c)| (a, 1.0 / (1.0 + (c - best) as f32 / 4.0)))
+                .map(|(c, a)| (a, if use_priors { 1.0 / (1.0 + (c - best) as f32 / 4.0) } else { 0.0 }))
                 .collect();
-            // Highest prior last, so it is popped first.
-            v.sort_by(|a, b| a.1.total_cmp(&b.1));
+            // Best first out: `unexplored` is popped from the back.
+            v.reverse();
             v
         } else {
             actions.into_iter().rev().map(|a| (a, 0.0)).collect()
@@ -105,6 +113,7 @@ pub fn mcts_evaluate_actions(
     let SolveParams { rollouts, max_depth, exploration, playout, prior_weight, cutoff, .. } = *params;
     let cutoff = cutoff && state.num_players() == 2;
     let use_priors = prior_weight > 0.0;
+    let candidates = usize::from(params.candidates);
     if !state.is_fully_known() {
         return internal("search needs a state without unknown cards; determinize it first");
     }
@@ -116,7 +125,9 @@ pub fn mcts_evaluate_actions(
 
     let mut rng = StdRng::seed_from_u64(seed);
     let root_actions = state.legal_actions();
-    let mut nodes = vec![Node::new(state, use_priors)];
+    // My own decision is always searched in full; pruning applies to the
+    // moves imagined after it.
+    let mut nodes = vec![Node::new(state, use_priors, 0)];
 
     for _ in 0..rollouts {
         let mut s = state.clone();
@@ -128,7 +139,8 @@ pub fn mcts_evaluate_actions(
             if let Some((action, prior)) = nodes[cur].unexplored.pop() {
                 s.execute(&action)?;
                 let child = nodes.len();
-                nodes.push(Node::new(&s, use_priors));
+                let k = if s.stock.len() >= usize::from(params.candidates_min_stock) { candidates } else { 0 };
+                nodes.push(Node::new(&s, use_priors, k));
                 nodes[cur].children.push((action, child, prior));
                 path.push(child);
                 break;
@@ -253,6 +265,14 @@ pub struct SolveParams {
     /// hands with [`eval`] instead of playing on.
     #[serde(default)]
     pub cutoff: bool,
+    /// Below the root, search only this many moves at each decision - the
+    /// ones the heuristic player rates best (see [`policy::move_cost`]) - as
+    /// long as at least `candidates_min_stock` cards are left to draw. The
+    /// player's own moves at the root are always all searched. 0 = no pruning.
+    #[serde(default)]
+    pub candidates: u8,
+    #[serde(default)]
+    pub candidates_min_stock: u8,
 }
 
 impl Default for SolveParams {
@@ -267,6 +287,8 @@ impl Default for SolveParams {
             exact_stock: 0,
             prior_weight: 0.0,
             cutoff: false,
+            candidates: 0,
+            candidates_min_stock: 0,
         }
     }
 }

@@ -213,3 +213,18 @@ fn deals_with_few_cards_left_are_solved_exactly() {
     let r = solve(&s, SolveParams { determinizations: 4, rollouts: 100, ..SolveParams::default() }, 9).unwrap();
     assert_eq!(r.exact_deals, 0);
 }
+
+#[test]
+fn pruning_never_drops_my_own_moves() {
+    // A fresh game: the attacker may lead any of six cards. Pruning applies
+    // below the root, so every one of them is still searched.
+    let config = GameConfig { deck_size: 36, num_players: 2, ..GameConfig::default() };
+    let s = GameState::new_computer_game(4, config).unwrap();
+    assert_eq!(s.legal_actions().len(), 6);
+    let p = SolveParams { determinizations: 2, rollouts: 300, candidates: 2, ..SolveParams::default() };
+    let r = solve(&s, p, 1).unwrap();
+    assert!(r.actions.iter().all(|a| a.visits > 0));
+    // And the results differ from an unpruned search, so it did something below.
+    let plain = solve(&s, SolveParams { determinizations: 2, rollouts: 300, ..SolveParams::default() }, 1).unwrap();
+    assert_ne!(r.actions, plain.actions);
+}
