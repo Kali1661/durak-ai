@@ -63,6 +63,12 @@
   const idleHint = () => ({ status: 'idle', summary: null, message: '' })
   const idleAi = () => ({ status: 'idle', player: null, message: '' })
   let hint = idleHint()
+  // Where searches run: 'native' when the app is served by the native program.
+  let engineKind = 'browser'
+  fetch('/api/info')
+    .then(r => (r.ok ? r.json() : null))
+    .then(info => { if (info?.engine === 'native') engineKind = 'native' })
+    .catch(() => {})
   let hintTally = null
   let ai = idleAi()
   /** The exact endgame solver's answer for the position of `epoch` (see lib/exact-solver.js). */
@@ -1138,9 +1144,10 @@
                 {#if settings.showHints}
                   <p class="mt-2 flex items-center gap-2 text-xs text-muted" role="status">
                     {#if hint.status === 'running'}<span class="spinner" aria-hidden="true"></span> Searching ({fmtTime(settings.hintThinkingMs)})… {hint.summary?.totalVisits ? `${hint.summary.totalVisits.toLocaleString('en')} playouts so far` : ''}
-                    {:else if hint.status === 'done'}Search finished: {hint.summary.totalVisits.toLocaleString('en')} playouts over {hint.summary.determinizations.toLocaleString('en')} possible deals.
+                    {:else if hint.status === 'done'}Search finished: {hint.summary.totalVisits.toLocaleString('en')} playouts over {hint.summary.determinizations.toLocaleString('en')} possible deals{#if hint.summary.exactDeals}, {hint.summary.exactDeals.toLocaleString('en')} of them solved exactly{/if}.
                     {:else if hint.status === 'error'}Suggestions are unavailable for this move.
                     {:else}Waiting to search.{/if}
+                    <span class="ml-auto shrink-0" title={engineKind === 'native' ? 'Searches run in the Durak AI program on this computer' : 'Searches run inside the browser'}>Engine: {engineKind}</span>
                   </p>
                   {#if exactNow.status === 'running'}
                     <p class="mt-1 flex items-center gap-2 text-xs text-muted" role="status"><span class="spinner" aria-hidden="true"></span> All cards are known - calculating the exact result…</p>

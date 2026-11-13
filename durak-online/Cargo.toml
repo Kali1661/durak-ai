@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["durak-core", "durak-wasm"]
+members = ["durak-core", "durak-wasm", "durak-native"]
 
 [profile.release]
 opt-level = 3    # Optimize for speed to maximize rollouts

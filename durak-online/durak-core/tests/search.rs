@@ -189,6 +189,27 @@ fn tree_search_requires_a_fully_known_state() {
         c(Clubs, Nine), c(Clubs, Ten), c(Clubs, Jack),
     ];
     let s = GameState::new_manual_game(c(Hearts, Six), hand, 0, vec![], GameConfig::default()).unwrap();
-    assert!(mcts_evaluate_actions(&s, 1, P0, 10, 100, 1.41, Playout::Random).is_err());
+    assert!(mcts_evaluate_actions(&s, 1, P0, &SolveParams { rollouts: 10, max_depth: 100, ..SolveParams::default() }).is_err());
     assert!(solve(&s, params(2, 50), 1).is_ok(), "solve determinizes first");
+}
+
+#[test]
+fn deals_with_few_cards_left_are_solved_exactly() {
+    // Late in a game with two cards left to draw.
+    let config = GameConfig { deck_size: 24, num_players: 2, ..GameConfig::default() };
+    let mut s = GameState::new_computer_game(3, config).unwrap();
+    while s.stock.len() > 2 {
+        let a = policy::heuristic_action(&s).unwrap();
+        s.apply(&a).unwrap();
+    }
+    assert!(!s.is_terminal());
+    let p = SolveParams { determinizations: 4, rollouts: 100, exact_nodes: 2_000_000, exact_stock: 4, ..SolveParams::default() };
+    let r = solve(&s, p, 9).unwrap();
+    assert!(r.exact_deals > 0, "no deal was solved exactly");
+    // Exact values are 0, 1/2 or 1 per deal, so pooled scores stay in range.
+    assert!(r.actions.iter().all(|a| (0.0..=1.0).contains(&a.score)));
+
+    // Off by default.
+    let r = solve(&s, SolveParams { determinizations: 4, rollouts: 100, ..SolveParams::default() }, 9).unwrap();
+    assert_eq!(r.exact_deals, 0);
 }

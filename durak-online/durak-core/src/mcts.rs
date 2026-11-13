@@ -23,12 +23,15 @@
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
+use crate::eval;
 use crate::policy::{self, Playout};
-use crate::{Action, EngineError, GameState, Outcome, PlayerId, MAX_PLAYERS};
+use crate::{solve_exact_deal, Action, EngineError, ExactValue, GameState, Outcome, Phase, PlayerId, MAX_PLAYERS};
 
 /// Upper bounds accepted by [`solve`]; larger requests are rejected.
 pub const MAX_DETERMINIZATIONS: u32 = 2_000;
 pub const MAX_ROLLOUTS: u32 = 200_000;
+/// Largest per-deal limit for exact solving inside [`solve`].
+pub const MAX_EXACT_NODES: u64 = 50_000_000;
 pub const MAX_SEARCH_DEPTH: u32 = 2_000;
 
 /// Search statistics for one root action.
@@ -52,17 +55,38 @@ pub struct MctsEval {
 }
 
 struct Node {
-    /// Sum of playout values per player, in half-points (2 = win, 1 = cut off).
-    value2: [u32; MAX_PLAYERS],
+    /// Sum of playout values per player (1 = not the durak, 0.5 = cut off).
+    value: [f64; MAX_PLAYERS],
     visits: u32,
     cutoffs: u32,
-    children: Vec<(Action, usize)>,
-    unexplored: Vec<Action>,
+    /// Explored moves: the move, the child node and the move's prior.
+    children: Vec<(Action, usize, f32)>,
+    /// Moves not tried yet, with their priors; popped from the back.
+    unexplored: Vec<(Action, f32)>,
 }
 
 impl Node {
-    fn new(unexplored: Vec<Action>) -> Self {
-        Self { value2: [0; MAX_PLAYERS], visits: 0, cutoffs: 0, children: Vec::new(), unexplored }
+    /// A node for `state`. With priors, moves are tried best-looking first and
+    /// carry a prior in (0, 1] from [`policy::move_cost`]; without, every
+    /// prior is 0 and moves are tried in move order.
+    fn new(state: &GameState, use_priors: bool) -> Self {
+        let actions = state.legal_actions();
+        let mut unexplored: Vec<(Action, f32)> = if use_priors {
+            let costs: Vec<i32> = actions.iter().map(|a| policy::move_cost(state, a)).collect();
+            let best = costs.iter().copied().min().unwrap_or(0);
+            let mut v: Vec<(Action, f32)> = actions
+                .into_iter()
+                .zip(costs)
+                .map(|(a, c)| (a, 1.0 / (1.0 + (c - best) as f32 / 4.0)))
+                .collect();
+            // Highest prior last, so it is popped first.
+            v.sort_by(|a, b| a.1.total_cmp(&b.1));
+            v
+        } else {
+            actions.into_iter().rev().map(|a| (a, 0.0)).collect()
+        };
+        unexplored.shrink_to_fit();
+        Self { value: [0.0; MAX_PLAYERS], visits: 0, cutoffs: 0, children: Vec::new(), unexplored }
     }
 }
 
@@ -76,11 +100,11 @@ pub fn mcts_evaluate_actions(
     state: &GameState,
     seed: u64,
     perspective: PlayerId,
-    rollouts: u32,
-    max_depth: u32,
-    exploration: f64,
-    playout: Playout,
+    params: &SolveParams,
 ) -> Result<MctsEval, EngineError> {
+    let SolveParams { rollouts, max_depth, exploration, playout, prior_weight, cutoff, .. } = *params;
+    let cutoff = cutoff && state.num_players() == 2;
+    let use_priors = prior_weight > 0.0;
     if !state.is_fully_known() {
         return internal("search needs a state without unknown cards; determinize it first");
     }
@@ -92,8 +116,7 @@ pub fn mcts_evaluate_actions(
 
     let mut rng = StdRng::seed_from_u64(seed);
     let root_actions = state.legal_actions();
-    // `unexplored` is popped from the back; reverse so expansion follows move order.
-    let mut nodes = vec![Node::new(root_actions.iter().rev().cloned().collect())];
+    let mut nodes = vec![Node::new(state, use_priors)];
 
     for _ in 0..rollouts {
         let mut s = state.clone();
@@ -102,11 +125,11 @@ pub fn mcts_evaluate_actions(
 
         // Selection, then expansion of one new node.
         while !s.is_terminal() {
-            if let Some(action) = nodes[cur].unexplored.pop() {
+            if let Some((action, prior)) = nodes[cur].unexplored.pop() {
                 s.execute(&action)?;
                 let child = nodes.len();
-                nodes.push(Node::new(s.legal_actions().into_iter().rev().collect()));
-                nodes[cur].children.push((action, child));
+                nodes.push(Node::new(&s, use_priors));
+                nodes[cur].children.push((action, child, prior));
                 path.push(child);
                 break;
             }
@@ -117,24 +140,35 @@ pub fn mcts_evaluate_actions(
             let ln_n = f64::from(nodes[cur].visits.max(1)).ln();
             let mut best = 0usize;
             let mut best_uct = f64::NEG_INFINITY;
-            for (i, (_, child)) in nodes[cur].children.iter().enumerate() {
+            for (i, (_, child, prior)) in nodes[cur].children.iter().enumerate() {
                 let c = &nodes[*child];
                 let n = f64::from(c.visits.max(1));
-                let uct = f64::from(c.value2[actor]) / (2.0 * n) + exploration * (ln_n / n).sqrt();
+                // Progressive bias: sensible-looking moves get a head start
+                // that fades as real results come in.
+                let uct = c.value[actor] / n
+                    + exploration * (ln_n / n).sqrt()
+                    + prior_weight * f64::from(*prior) / (n + 1.0);
                 if uct > best_uct {
                     best_uct = uct;
                     best = i;
                 }
             }
-            let (action, child) = nodes[cur].children[best].clone();
+            let (action, child, _) = nodes[cur].children[best].clone();
             s.execute(&action)?;
             cur = child;
             path.push(child);
         }
 
-        // Playout: random or heuristic players (see `policy`).
+        // Playout: random or heuristic players (see `policy`). With `cutoff`,
+        // a two-player playout stops once the stock is empty and the hands
+        // are scored instead (see `eval`).
         let mut depth = 0u32;
+        let mut scored = None;
         while !s.is_terminal() && depth < max_depth {
+            if cutoff && s.stock.is_empty() && s.phase == Phase::Attacking && s.table.is_empty() {
+                scored = Some(eval::attacker_wins(&s));
+                break;
+            }
             let acts = s.legal_actions();
             if acts.is_empty() {
                 return internal("a running game has no legal actions");
@@ -144,25 +178,27 @@ pub fn mcts_evaluate_actions(
             depth += 1;
         }
 
-        let mut value2 = [1u32; MAX_PLAYERS];
-        let cut_off = match s.outcome() {
-            Outcome::InProgress => true,
-            Outcome::Draw => {
-                value2 = [2; MAX_PLAYERS];
-                false
+        let mut value = [0.5; MAX_PLAYERS];
+        let mut cut_off = false;
+        if let Some(p) = scored {
+            value[s.attacker.index()] = p;
+            value[s.defender.index()] = 1.0 - p;
+        } else {
+            match s.outcome() {
+                Outcome::InProgress => cut_off = true,
+                Outcome::Draw => value = [1.0; MAX_PLAYERS],
+                Outcome::Durak { player } => {
+                    value = [1.0; MAX_PLAYERS];
+                    value[player.index()] = 0.0;
+                }
             }
-            Outcome::Durak { player } => {
-                value2 = [2; MAX_PLAYERS];
-                value2[player.index()] = 0;
-                false
-            }
-        };
+        }
 
         for idx in path {
             let node = &mut nodes[idx];
             node.visits += 1;
             node.cutoffs += u32::from(cut_off);
-            for (total, v) in node.value2.iter_mut().zip(value2) {
+            for (total, v) in node.value.iter_mut().zip(value) {
                 *total += v;
             }
         }
@@ -172,12 +208,12 @@ pub fn mcts_evaluate_actions(
     let actions = root_actions
         .into_iter()
         .map(|action| {
-            let child = nodes[0].children.iter().find(|(a, _)| *a == action).map(|(_, i)| &nodes[*i]);
+            let child = nodes[0].children.iter().find(|(a, _, _)| *a == action).map(|(_, i, _)| &nodes[*i]);
             match child {
                 Some(n) if n.visits > 0 => ActionEval {
                     action,
                     visits: n.visits,
-                    score: n.value2[p] as f32 / (2.0 * n.visits as f32),
+                    score: (n.value[p] / f64::from(n.visits)) as f32,
                     cutoffs: n.cutoffs,
                 },
                 _ => ActionEval { action, visits: 0, score: 0.0, cutoffs: 0 },
@@ -202,11 +238,36 @@ pub struct SolveParams {
     /// How the players move in a playout.
     #[serde(default)]
     pub playout: Playout,
+    /// Two players with at most `exact_stock` cards left to draw: solve each
+    /// deal exactly, searching up to this many positions, and fall back to
+    /// playouts for a deal that is not settled in time. 0 = never.
+    #[serde(default)]
+    pub exact_nodes: u64,
+    #[serde(default)]
+    pub exact_stock: u8,
+    /// Weight of the head start sensible-looking moves get in the tree
+    /// (progressive bias from [`policy::move_cost`]); 0 = none.
+    #[serde(default)]
+    pub prior_weight: f64,
+    /// Two players: end each playout once the stock is empty and score the
+    /// hands with [`eval`] instead of playing on.
+    #[serde(default)]
+    pub cutoff: bool,
 }
 
 impl Default for SolveParams {
     fn default() -> Self {
-        Self { determinizations: 1, rollouts: 1000, max_depth: 500, exploration: 1.41, playout: Playout::default() }
+        Self {
+            determinizations: 1,
+            rollouts: 1000,
+            max_depth: 500,
+            exploration: 1.41,
+            playout: Playout::default(),
+            exact_nodes: 0,
+            exact_stock: 0,
+            prior_weight: 0.0,
+            cutoff: false,
+        }
     }
 }
 
@@ -224,6 +285,12 @@ impl SolveParams {
         check("determinizations", self.determinizations, MAX_DETERMINIZATIONS)?;
         check("rollouts", self.rollouts, MAX_ROLLOUTS)?;
         check("max_depth", self.max_depth, MAX_SEARCH_DEPTH)?;
+        if self.exact_nodes > MAX_EXACT_NODES {
+            return Err(EngineError::InvalidInput(format!("exact_nodes must be at most {MAX_EXACT_NODES}")));
+        }
+        if !self.prior_weight.is_finite() || self.prior_weight < 0.0 {
+            return Err(EngineError::InvalidInput("prior_weight must be a non-negative number".into()));
+        }
         if !self.exploration.is_finite() || self.exploration < 0.0 {
             return Err(EngineError::InvalidInput("exploration must be a non-negative number".into()));
         }
@@ -241,6 +308,9 @@ pub struct SolveResult {
     pub total_visits: u32,
     /// Playouts that hit the depth limit.
     pub total_cutoffs: u32,
+    /// Deals solved exactly instead of by playouts (see [`SolveParams::exact_nodes`]).
+    #[serde(default)]
+    pub exact_deals: u32,
     /// One entry per legal action, best score first; unevaluated actions last.
     pub actions: Vec<ActionEval>,
 }
@@ -269,8 +339,12 @@ pub fn solve(state: &GameState, params: SolveParams, seed: u64) -> Result<SolveR
         determinizations: params.determinizations,
         total_visits: 0,
         total_cutoffs: 0,
+        exact_deals: 0,
         actions: vec![],
     };
+    let exact = params.exact_nodes > 0
+        && state.num_players() == 2
+        && state.stock.len() <= usize::from(params.exact_stock);
     if root_actions.is_empty() {
         result.determinizations = 0;
         return Ok(result);
@@ -283,15 +357,32 @@ pub fn solve(state: &GameState, params: SolveParams, seed: u64) -> Result<SolveR
         let det_seed = splitmix64(seed ^ splitmix64(u64::from(i)));
         let mut rng = StdRng::seed_from_u64(det_seed);
         let det_state = state.determinize(perspective, &mut rng)?;
-        let eval = mcts_evaluate_actions(
-            &det_state,
-            det_seed,
-            perspective,
-            params.rollouts,
-            params.max_depth,
-            params.exploration,
-            params.playout,
-        )?;
+
+        // Few cards left to draw: this deal may be small enough to solve.
+        // Each solved move counts as many visits as a deal's playouts, valued
+        // 1 for a win, 1/2 for a draw and 0 for a loss.
+        if exact {
+            if let Some(r) = solve_exact_deal(&det_state, params.exact_nodes)? {
+                if r.actions.iter().all(|a| a.value.is_some()) {
+                    for a in &r.actions {
+                        let Some(slot) = root_actions.iter().position(|x| x.same_move(&a.action)) else {
+                            return internal("the solver returned a move that is not legal in the real position");
+                        };
+                        let v = match a.value {
+                            Some(ExactValue::Win) => 1.0,
+                            Some(ExactValue::Draw) => 0.5,
+                            _ => 0.0,
+                        };
+                        totals[slot].0 += u64::from(params.rollouts);
+                        totals[slot].1 += f64::from(params.rollouts) * v;
+                    }
+                    result.exact_deals += 1;
+                    continue;
+                }
+            }
+        }
+
+        let eval = mcts_evaluate_actions(&det_state, det_seed, perspective, &params)?;
 
         for e in eval.actions {
             // The deal changes card visibility, never which moves exist.

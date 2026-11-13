@@ -82,6 +82,20 @@ pub fn is_exactly_solvable(state: &GameState) -> bool {
 /// [`is_exactly_solvable`]) or the game is over. Moves the search could not
 /// settle within `max_nodes` positions have the value `None`.
 pub fn solve_exact(state: &GameState, max_nodes: u64) -> Result<Option<ExactResult>, EngineError> {
+    if !is_exactly_solvable(state) {
+        return Ok(None);
+    }
+    solve_with(state, max_nodes, &mut FastSearch::new())
+}
+
+/// Like [`solve_exact`], for a two-player position where every card is known,
+/// the order of the stock included - one deal of the hidden cards, as the
+/// sampling search makes them. Cards may still be left to draw. `Ok(None)`
+/// when the position does not qualify or the game is over.
+pub fn solve_exact_deal(state: &GameState, max_nodes: u64) -> Result<Option<ExactResult>, EngineError> {
+    if state.num_players() != 2 || !state.is_fully_known() {
+        return Ok(None);
+    }
     solve_with(state, max_nodes, &mut FastSearch::new())
 }
 
@@ -90,6 +104,9 @@ pub fn solve_exact(state: &GameState, max_nodes: u64) -> Result<Option<ExactResu
 /// It exists so the tests can check the fast solver against the real rules.
 #[doc(hidden)]
 pub fn solve_exact_reference(state: &GameState, max_nodes: u64) -> Result<Option<ExactResult>, EngineError> {
+    if state.num_players() != 2 || !(is_exactly_solvable(state) || state.is_fully_known()) {
+        return Ok(None);
+    }
     solve_with(state, max_nodes, &mut ReferenceSearch::new())
 }
 
@@ -107,7 +124,7 @@ fn solve_with(
     search: &mut impl PositionSearch,
 ) -> Result<Option<ExactResult>, EngineError> {
     state.validate()?;
-    if state.is_terminal() || !is_exactly_solvable(state) {
+    if state.is_terminal() {
         return Ok(None);
     }
     let perspective = state.actor_to_move();
@@ -299,8 +316,8 @@ struct Pos {
     open: u64,
     /// Trumps already shown to pass the attack on this trick.
     shown: u64,
-    /// The trump card while it is still the last card of the stock.
-    stock: u64,
+    /// Cards left to draw: the first `stock` of [`Rules::stock`].
+    stock: u8,
     attacker: u8,
     phase: u8,
     /// Cards laid down since the defender last answered.
@@ -317,6 +334,30 @@ struct Rules {
     first_trick_limit: bool,
     classic_ending: bool,
     cards_per_attack: u8,
+    /// The stock in drawing order from the bottom (the face-up trump card
+    /// first); cards are drawn from the top, the end of what is left.
+    stock: [u64; MAX_STOCK],
+}
+
+/// Largest stock a two-player game can have (52 cards, 12 dealt).
+const MAX_STOCK: usize = 40;
+
+impl Rules {
+    fn of(s: &GameState) -> Rules {
+        let mut stock = [0u64; MAX_STOCK];
+        for (slot, card) in stock.iter_mut().zip(&s.stock) {
+            *slot = bit(card);
+        }
+        Rules {
+            trump: s.trump as u32,
+            reflecting: s.config.reflecting,
+            trump_reflecting: s.config.trump_reflecting,
+            first_trick_limit: s.config.first_trick_limit,
+            classic_ending: s.config.classic_ending,
+            cards_per_attack: s.config.cards_per_attack,
+            stock,
+        }
+    }
 }
 
 fn bit(card: &Card) -> u64 {
@@ -351,7 +392,7 @@ impl Pos {
             def,
             open,
             shown: set(&s.reflected_trumps),
-            stock: set(&s.stock),
+            stock: s.stock.len() as u8,
             attacker: s.attacker.index() as u8,
             phase: match s.phase {
                 Phase::Attacking => ATTACKING,
@@ -371,7 +412,8 @@ impl Pos {
             | u64::from(self.batch) << 4;
         let mut a = 0x243F_6A88_85A3_08D3u64;
         let mut b = 0x1319_8A2E_0370_7344u64;
-        for v in [self.hand[0], self.hand[1], self.atk, self.def, self.open, self.shown, self.stock, flags] {
+        let flags = flags | u64::from(self.stock) << 8;
+        for v in [self.hand[0], self.hand[1], self.atk, self.def, self.open, self.shown, flags] {
             a = mix(a ^ v);
             b = mix(b.rotate_left(23) ^ v ^ 0x9E37_79B9_7F4A_7C15);
         }
@@ -422,11 +464,11 @@ impl Pos {
 
     /// Draw up to six cards, the attacker first, then start the next trick
     /// with `main` attacking (or the other player, if `main` is out).
-    fn next_trick(&mut self, main: usize) {
+    fn next_trick(&mut self, main: usize, rules: &Rules) {
         for p in [self.attacker as usize, 1 - self.attacker as usize] {
-            if self.stock != 0 && (self.hand[p].count_ones() as usize) < HAND_SIZE {
-                self.hand[p] |= self.stock;
-                self.stock = 0;
+            while self.stock != 0 && (self.hand[p].count_ones() as usize) < HAND_SIZE {
+                self.stock -= 1;
+                self.hand[p] |= rules.stock[self.stock as usize];
             }
         }
         let active = |pos: &Pos, p: usize| pos.hand[p] != 0 || pos.stock != 0;
@@ -489,7 +531,7 @@ impl Pos {
                     // Pass: the defence succeeded, the table is discarded.
                     let mut p = *self;
                     p.discarded = true;
-                    p.next_trick(d);
+                    p.next_trick(d, rules);
                     out.push((200, p));
                 }
             }
@@ -565,7 +607,7 @@ impl Pos {
                 // Done: the defender picks up the table and misses their attack.
                 let mut p = *self;
                 p.hand[d] |= self.atk | self.def;
-                p.next_trick(a);
+                p.next_trick(a, rules);
                 out.push((200, p));
             }
         }
@@ -780,14 +822,7 @@ const TURN: u64 = 20_000;
 
 impl PositionSearch for FastSearch {
     fn value(&mut self, s: &GameState, budget: u64) -> Result<Option<u8>, EngineError> {
-        let rules = Rules {
-            trump: s.trump as u32,
-            reflecting: s.config.reflecting,
-            trump_reflecting: s.config.trump_reflecting,
-            first_trick_limit: s.config.first_trick_limit,
-            classic_ending: s.config.classic_ending,
-            cards_per_attack: s.config.cards_per_attack,
-        };
+        let rules = Rules::of(s);
         let pos = Pos::from_state(s);
         let end = self.nodes + budget;
 

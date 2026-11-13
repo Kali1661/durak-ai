@@ -7,7 +7,8 @@
 //!
 //! Engines: `random` (any legal move), `rules` (the heuristic playout player
 //! on its own), `mcts` (search with random playouts, as before) and `mcts-h`
-//! (search with heuristic playouts).
+//! (search with heuristic playouts). Search settings follow a colon, e.g.
+//! `mcts-h:prior=1,xnodes=100000,xstock=6,c=1.41,cut=1` (see `engine`).
 //!
 //! `match` plays every deal once per seat for A, so both sides get the same
 //! cards, and reports A's results with a 95% margin. In two-player games both
@@ -30,17 +31,44 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 enum Engine {
     Random,
     Rules,
-    Mcts(Playout),
+    Search(Search),
 }
 
-fn engine(name: &str) -> Engine {
-    match name {
-        "random" => Engine::Random,
-        "rules" => Engine::Rules,
-        "mcts" => Engine::Mcts(Playout::Random),
-        "mcts-h" => Engine::Mcts(Playout::Heuristic),
+/// Search settings that are not about effort.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Search {
+    playout: Playout,
+    prior: f64,
+    exact_nodes: u64,
+    exact_stock: u8,
+    exploration: f64,
+    cutoff: bool,
+}
+
+/// `random`, `rules`, `mcts` (random playouts), `mcts-h` (heuristic
+/// playouts), optionally with settings: `mcts-h:prior=1,xnodes=100000,xstock=6,c=1.41`.
+fn engine(spec: &str) -> Engine {
+    let (name, opts) = spec.split_once(':').unwrap_or((spec, ""));
+    let playout = match name {
+        "random" => return Engine::Random,
+        "rules" => return Engine::Rules,
+        "mcts" => Playout::Random,
+        "mcts-h" => Playout::Heuristic,
         other => panic!("unknown engine {other}; use random, rules, mcts or mcts-h"),
+    };
+    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false };
+    for kv in opts.split(',').filter(|s| !s.is_empty()) {
+        let (k, v) = kv.split_once('=').expect("settings look like key=value");
+        match k {
+            "prior" => e.prior = v.parse().unwrap(),
+            "xnodes" => e.exact_nodes = v.parse().unwrap(),
+            "xstock" => e.exact_stock = v.parse().unwrap(),
+            "c" => e.exploration = v.parse().unwrap(),
+            "cut" => e.cutoff = v == "1",
+            other => panic!("unknown setting {other}"),
+        }
     }
+    Engine::Search(e)
 }
 
 #[derive(Clone, Copy)]
@@ -63,7 +91,7 @@ fn choose(state: &GameState, e: Engine, effort: Effort, seed: u64) -> Action {
             acts[StdRng::seed_from_u64(seed).gen_range(0..acts.len())].clone()
         }
         Engine::Rules => policy::heuristic_action(state).expect("game running"),
-        Engine::Mcts(playout) => search(state, playout, effort, seed, None),
+        Engine::Search(e) => search(state, e, effort, seed, None),
     }
 }
 
@@ -82,11 +110,22 @@ fn exact_choice(state: &GameState, effort: Effort, seed: u64) -> Option<Action> 
         return Some(r.actions[0].action.clone());
     }
     // The same search for both engines here, so the endgame is a level field.
-    Some(search(state, Playout::Heuristic, effort, seed, Some(&safe)))
+    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false };
+    Some(search(state, plain, effort, seed, Some(&safe)))
 }
 
-fn search(state: &GameState, playout: Playout, effort: Effort, seed: u64, only: Option<&[Action]>) -> Action {
-    let params = SolveParams { determinizations: effort.deals, rollouts: effort.playouts, playout, ..SolveParams::default() };
+fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<&[Action]>) -> Action {
+    let params = SolveParams {
+        determinizations: effort.deals,
+        rollouts: effort.playouts,
+        playout: e.playout,
+        prior_weight: e.prior,
+        exact_nodes: e.exact_nodes,
+        exact_stock: e.exact_stock,
+        exploration: e.exploration,
+        cutoff: e.cutoff,
+        ..SolveParams::default()
+    };
     let r = solve(state, params, seed).expect("search runs");
     r.actions
         .iter()

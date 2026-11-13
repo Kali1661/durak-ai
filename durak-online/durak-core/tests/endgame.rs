@@ -85,6 +85,69 @@ fn the_fast_solver_agrees_with_the_engine_rules() {
     assert!(checked > 500, "only {checked} moves were compared");
 }
 
+/// Small made-up positions with cards still to draw (every card known, as the
+/// sampling search deals them), and the positions random play leads to from
+/// them while the stock lasts.
+fn positions_with_stock(config: GameConfig, seeds: std::ops::Range<u64>) -> Vec<GameState> {
+    let mut out = vec![];
+    for seed in seeds {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut deck = full_deck(config.deck_size).unwrap();
+        for i in (1..deck.len()).rev() {
+            deck.swap(i, rng.gen_range(0..=i));
+        }
+        let mut take = |n: usize| deck.drain(..n).map(|c| c.as_private()).collect::<Vec<_>>();
+        let hands = vec![take(rng.gen_range(1..=3)), take(rng.gen_range(1..=3))];
+        let stock = take(rng.gen_range(1..=4));
+        let mut pos = Pos::new(hands);
+        pos.trump = stock[0].suit();
+        pos.stock = stock.iter().map(|c| c.as_public()).collect();
+        if seed % 2 == 1 {
+            pos.attacker = P1;
+            pos.defender = P0;
+        }
+        pos.deck_size = config.deck_size;
+        pos.reflecting = config.reflecting;
+        pos.trump_reflecting = config.trump_reflecting;
+        pos.first_trick_limit = config.first_trick_limit;
+        pos.classic_ending = config.classic_ending;
+        pos.cards_per_attack = config.cards_per_attack;
+        let mut s = pos.build();
+        while !s.is_terminal() && !s.stock.is_empty() {
+            out.push(s.clone());
+            let acts = s.legal_actions();
+            s.apply(&acts[rng.gen_range(0..acts.len())]).unwrap();
+        }
+    }
+    out
+}
+
+#[test]
+fn drawing_from_the_stock_agrees_with_the_engine_rules() {
+    let checked = with_big_stack(|| {
+        let mut checked = 0;
+        for config in two_player_configs() {
+            for s in positions_with_stock(config, 1..40) {
+                if s.stock.len() >= 2 {
+                    assert!(solve_exact(&s, NODES).unwrap().is_none(), "a real position with a stock is not solvable");
+                }
+                let fast = solve_exact_deal(&s, NODES).unwrap().expect("a known deal is solvable");
+                let slow = solve_exact_reference(&s, NODES).unwrap().expect("a known deal is solvable");
+                for (f, r) in fast.actions.iter().zip(&slow.actions) {
+                    assert_eq!(f.action, r.action);
+                    if let (Some(fv), Some(rv)) = (f.value, r.value) {
+                        assert_eq!(fv, rv, "{:?} in {config:?}
+{s:#?}", f.action);
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        checked
+    });
+    assert!(checked > 200, "only {checked} moves were compared");
+}
+
 #[test]
 fn a_move_called_winning_wins_against_any_replies() {
     // Follow the solver's winning moves; let the opponent play at random.

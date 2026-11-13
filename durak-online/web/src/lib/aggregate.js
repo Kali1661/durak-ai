@@ -18,7 +18,7 @@ export function actionKey(action) {
 }
 
 export function createTally() {
-  return { byKey: new Map(), determinizations: 0, totalVisits: 0, totalCutoffs: 0, batches: 0 }
+  return { byKey: new Map(), determinizations: 0, totalVisits: 0, totalCutoffs: 0, exactDeals: 0, batches: 0 }
 }
 
 const isCount = n => Number.isInteger(n) && n >= 0
@@ -45,6 +45,8 @@ export function addResult(tally, result) {
   tally.determinizations += isCount(result.determinizations) ? result.determinizations : 0
   tally.totalVisits += isCount(result.total_visits) ? result.total_visits : 0
   tally.totalCutoffs += isCount(result.total_cutoffs) ? result.total_cutoffs : 0
+  // Deals small enough to be solved exactly instead of by playouts.
+  tally.exactDeals = (tally.exactDeals || 0) + (isCount(result.exact_deals) ? result.exact_deals : 0)
   tally.batches += 1
   return tally
 }
@@ -77,6 +79,7 @@ export function summarize(tally, legal) {
     determinizations: tally?.determinizations || 0,
     totalVisits: tally?.totalVisits || 0,
     totalCutoffs: tally?.totalCutoffs || 0,
+    exactDeals: tally?.exactDeals || 0,
     batches: tally?.batches || 0,
   }
 }
