@@ -264,3 +264,26 @@ test('a kept search goes on from run to run and its results pool', () => {
   assert.ok(pickBest(summary))
   assert.throws(() => new wasm.KeptSearch({ state: { nonsense: true } }), /could not read/)
 })
+
+test('the opponent\'s play says something about their hand, and the search takes it', () => {
+  // Play a computer-dealt game on with the first legal move until P1 has moved a few times.
+  const initial = newGame(12, { reflecting: true })
+  let state = initial
+  const steps = []
+  for (let i = 0; i < 40 && wasm.game_outcome(state).status === 'in_progress'; i++) {
+    const action = wasm.legal_actions(state)[0]
+    state = wasm.apply_action(state, action)
+    steps.push({ state, action })
+  }
+  const beliefs = wasm.opponent_beliefs(initial, steps)
+  assert.equal(beliefs.weights.length, 52)
+  assert.ok(beliefs.weights.every(w => w > 0 && w <= 1))
+  assert.ok(beliefs.weights.some(w => w < 1), 'forty moves taught something')
+  assert.deepEqual(wasm.opponent_beliefs(initial, []).weights, Array(52).fill(1))
+
+  if (wasm.game_outcome(state).status === 'in_progress') {
+    const search = new wasm.KeptSearch({ state, seed: 1n, beliefs })
+    assert.ok(search.run(2, 200).total_visits >= 400)
+    search.free()
+  }
+})
