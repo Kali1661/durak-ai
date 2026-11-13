@@ -4,7 +4,7 @@
 // gets exactly one reply - { type: 'result' | 'exact-result' } or
 // { type: 'error' } - carrying the id it was sent with.
 
-import init, { solve, solve_exact } from '../wasm/durak_wasm.js'
+import init, { KeptSearch, solve_exact } from '../wasm/durak_wasm.js'
 
 let ready = null
 
@@ -23,6 +23,34 @@ async function post(path, body) {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
+}
+
+// The search of the position asked about last is kept, so that asking again
+// about the same position goes on from where it stopped (in two-player games
+// the search tree keeps growing) instead of starting over. The native engine
+// keeps its searches under the same id.
+const searchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+let kept = null // { key, search }
+
+function keptSearch(req) {
+  const key = JSON.stringify([req.state, req.max_depth])
+  if (kept?.key !== key) {
+    kept?.search.free()
+    kept = null
+    kept = { key, search: new KeptSearch({ state: req.state, max_depth: req.max_depth }) }
+  }
+  return kept.search
+}
+
+function solve(req) {
+  try {
+    return keptSearch(req).run(req.determinizations, req.rollouts_per_determinization)
+  } catch (e) {
+    // Never go on with a search that failed part-way.
+    try { kept?.search.free() } catch { /* already gone */ }
+    kept = null
+    throw e
+  }
 }
 
 function describe(err) {
@@ -46,7 +74,7 @@ self.onmessage = async e => {
       self.postMessage({ type: 'exact-result', id: msg.id, result, elapsedMs: performance.now() - startedAt })
       return
     }
-    const result = useNative ? await post('/api/solve', msg.req) : solve(msg.req)
+    const result = useNative ? await post('/api/solve', { ...msg.req, search: searchId }) : solve(msg.req)
     self.postMessage({ type: 'result', id: msg.id, result, elapsedMs: performance.now() - startedAt })
   } catch (err) {
     // A failed init must be retried by the next request, not cached.

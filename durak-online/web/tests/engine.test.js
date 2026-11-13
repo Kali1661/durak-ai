@@ -248,3 +248,19 @@ test('several cards per attack: the attacker is offered to add more or let the d
     }
   }
 })
+
+test('a kept search goes on from run to run and its results pool', () => {
+  const state = newGame(5, { reflecting: true })
+  const search = new wasm.KeptSearch({ state, seed: 3n })
+  const tally = createTally()
+  for (let i = 0; i < 3; i++) {
+    const result = search.run(2, 300)
+    assert.equal(result.total_visits, 600, 'each run reports its own playouts only')
+    addResult(tally, result)
+  }
+  search.free()
+  const summary = summarize(tally, wasm.legal_actions(state))
+  assert.equal(summary.totalVisits, 1800)
+  assert.ok(pickBest(summary))
+  assert.throws(() => new wasm.KeptSearch({ state: { nonsense: true } }), /could not read/)
+})

@@ -6,16 +6,13 @@
 
 use durak_core::{
     pick_random_action as core_pick_random_action, Action, Card, EngineError, GameConfig,
-    GameState, Outcome, PlayerId, Rank, SolveParams,
+    GameState, Outcome, PlayerId, Rank, Search, SolveParams,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 const DEFAULT_ROLLOUTS: u32 = 1000;
 const DEFAULT_MAX_DEPTH: u32 = 500;
-/// Positions searched per deal when deals are solved exactly during a search.
-const EXACT_DEAL_NODES: u64 = 2_000_000;
-const EXPLORATION: f64 = 1.41;
 
 fn err(e: EngineError) -> JsValue {
     JsValue::from_str(&e.to_string())
@@ -184,23 +181,37 @@ pub fn solve(req: JsValue) -> Result<JsValue, JsValue> {
         determinizations: req.determinizations.unwrap_or(1),
         rollouts: req.rollouts_per_determinization.unwrap_or(DEFAULT_ROLLOUTS),
         max_depth: req.max_depth.unwrap_or(DEFAULT_MAX_DEPTH),
-        exploration: EXPLORATION,
-        // One tree over all deals (two-player games; ignored with three):
-        // in 300 arena games it was the durak 41% of the time against the
-        // separate trees, at the same number of playouts.
-        shared_tree: true,
-        // Four or fewer cards left to draw: solve each deal exactly where it
-        // fits in EXACT_DEAL_NODES positions (falls back to playouts if not).
-        exact_nodes: EXACT_DEAL_NODES,
-        exact_stock: 4,
-        // Once the stock is empty, score the hands (trumps, cards that cannot
-        // be beaten) instead of playing on.
-        cutoff: true,
-        // Everything else (playout style, pruning, priors): the engine's defaults.
-        ..SolveParams::default()
+        ..SolveParams::app()
     };
     let seed = req.seed.unwrap_or_else(random_seed);
     out(&durak_core::solve(&req.state, params, seed).map_err(err)?)
+}
+
+/// A search of one position that is kept between calls: each `run` adds work
+/// and returns the results of that work alone (the same shape [`solve`]
+/// returns), so results of several runs can be pooled - while in two-player
+/// games the search tree keeps growing from run to run instead of starting
+/// again. Call `free()` when done with the position.
+#[wasm_bindgen]
+pub struct KeptSearch {
+    inner: Search,
+}
+
+#[wasm_bindgen]
+impl KeptSearch {
+    /// Takes the request [`solve`] takes; its `determinizations` and
+    /// `rollouts_per_determinization` are given to each `run` instead.
+    #[wasm_bindgen(constructor)]
+    pub fn new(req: JsValue) -> Result<KeptSearch, JsValue> {
+        let req: SolveRequest = parse(req, "the solve request")?;
+        let params = SolveParams { max_depth: req.max_depth.unwrap_or(DEFAULT_MAX_DEPTH), ..SolveParams::app() };
+        let seed = req.seed.unwrap_or_else(random_seed);
+        Ok(KeptSearch { inner: Search::new(&req.state, params, seed).map_err(err)? })
+    }
+
+    pub fn run(&mut self, determinizations: u32, rollouts: u32) -> Result<JsValue, JsValue> {
+        out(&self.inner.run(determinizations, rollouts).map_err(err)?)
+    }
 }
 
 /// Default limit on positions searched by [`solve_exact`].

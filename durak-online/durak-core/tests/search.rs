@@ -255,3 +255,49 @@ fn one_tree_over_all_deals() {
         assert_eq!(separate.actions == r.actions, players == 3);
     }
 }
+
+#[test]
+fn a_continued_search_keeps_its_tree() {
+    let config = GameConfig { deck_size: 36, num_players: 2, ..GameConfig::default() };
+    let s = GameState::new_computer_game(21, config).unwrap();
+    let p = SolveParams { shared_tree: true, ..SolveParams::default() };
+
+    // Two runs of a kept search find together exactly what one run of twice
+    // the size finds: the second run goes on from the first one's tree.
+    let whole = solve(&s, SolveParams { determinizations: 2, rollouts: 400, ..p }, 5).unwrap();
+    let mut search = Search::new(&s, p, 5).unwrap();
+    let first = search.run(1, 400).unwrap();
+    let second = search.run(1, 400).unwrap();
+    assert_eq!(first.total_visits, 400);
+    assert_eq!(second.total_visits, 400);
+    for a in &whole.actions {
+        let part = |r: &durak_core::SolveResult| {
+            let e = r.actions.iter().find(|e| e.action == a.action).unwrap();
+            (e.visits, f64::from(e.visits) * f64::from(e.score))
+        };
+        let (v1, s1) = part(&first);
+        let (v2, s2) = part(&second);
+        assert_eq!(v1 + v2, a.visits);
+        assert!((s1 + s2 - f64::from(a.visits) * f64::from(a.score)).abs() < 0.05);
+    }
+}
+
+#[test]
+fn deals_too_big_to_solve_go_to_the_shared_tree() {
+    let config = GameConfig { deck_size: 36, num_players: 2, ..GameConfig::default() };
+    let mut s = GameState::new_computer_game(3, config).unwrap();
+    while s.stock.len() > 4 {
+        let a = policy::heuristic_action(&s).unwrap();
+        s.apply(&a).unwrap();
+    }
+    assert!(!s.is_terminal());
+    // One position is never enough to solve a deal.
+    let p = SolveParams { shared_tree: true, cutoff: true, exact_nodes: 1, exact_stock: 4, ..SolveParams::default() };
+    let mut search = Search::new(&s, p, 2).unwrap();
+    for _ in 0..2 {
+        let r = search.run(3, 200).unwrap();
+        assert_eq!(r.exact_deals, 0);
+        // Nothing is lost: the tree does the playouts of every deal asked for.
+        assert_eq!(r.total_visits, 600);
+    }
+}

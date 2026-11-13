@@ -7,11 +7,12 @@
 //!
 //! `durak-ai [--port N] [--no-browser]`
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use durak_core::{solve, solve_exact, GameState, SolveParams};
+use durak_core::{solve_exact, GameState, Search, SolveParams};
 use serde::Deserialize;
 use tiny_http::{Header, Method, Request, Response, Server};
 
@@ -20,8 +21,10 @@ include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 const FIRST_PORT: u16 = 8787;
 const DEFAULT_ROLLOUTS: u32 = 1000;
 const DEFAULT_MAX_DEPTH: u32 = 500;
-/// Positions searched per deal when deals are solved exactly during a search.
-const EXACT_DEAL_NODES: u64 = 2_000_000;
+/// A kept search is dropped when it has not been asked about for this long...
+const KEEP_SEARCHES: Duration = Duration::from_secs(120);
+/// ...and no more than this many are kept at once.
+const MAX_KEPT_SEARCHES: usize = 64;
 /// The browser engine stops at 6 million positions for memory; natively there is room for more.
 const MAX_EXACT_NODES: u64 = 12_000_000;
 /// The app sizes exact searches for the browser engine's speed, which the
@@ -40,6 +43,10 @@ struct SolveRequest {
     max_depth: Option<u32>,
     #[serde(default)]
     seed: Option<u64>,
+    /// Keep the search under this id and go on with it when asked again
+    /// about the same position.
+    #[serde(default)]
+    search: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -147,24 +154,41 @@ fn handle(mut req: Request, origin: &str, cores: usize) {
     }
 }
 
+/// Searches kept between requests, by the id the app's worker sent: the
+/// search, its depth limit and when it was last used.
+type Kept = HashMap<String, (Search, u32, Instant)>;
+
+fn kept() -> MutexGuard<'static, Kept> {
+    static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+    // A search that panicked must not take the others down with it.
+    KEPT.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn run_solve(body: &str) -> Result<String, (u16, String)> {
     let r: SolveRequest = serde_json::from_str(body).map_err(|e| (400, format!("could not read the solve request: {e}")))?;
-    let params = SolveParams {
-        determinizations: r.determinizations.unwrap_or(1),
-        rollouts: r.rollouts_per_determinization.unwrap_or(DEFAULT_ROLLOUTS),
-        max_depth: r.max_depth.unwrap_or(DEFAULT_MAX_DEPTH),
-        // As in the browser engine (see durak-wasm).
-        shared_tree: true,
-        // Four or fewer cards left to draw: solve each deal exactly where it
-        // fits in EXACT_DEAL_NODES positions (falls back to playouts if not).
-        exact_nodes: EXACT_DEAL_NODES,
-        exact_stock: 4,
-        // Once the stock is empty, score the hands (trumps, cards that cannot
-        // be beaten) instead of playing on.
-        cutoff: true,
-        ..SolveParams::default()
+    let max_depth = r.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
+
+    // Asked again about the same position: go on with the search already
+    // made for it (as the browser engine does, see durak-wasm).
+    let held = r.search.as_ref().and_then(|id| kept().remove(id));
+    let mut search = match held {
+        Some((search, depth, _)) if depth == max_depth && *search.state() == r.state => search,
+        _ => {
+            let params = SolveParams { max_depth, ..SolveParams::app() };
+            Search::new(&r.state, params, r.seed.unwrap_or_else(seed)).map_err(|e| (422, e.to_string()))?
+        }
     };
-    let result = solve(&r.state, params, r.seed.unwrap_or_else(seed)).map_err(|e| (422, e.to_string()))?;
+    let result = search
+        .run(r.determinizations.unwrap_or(1), r.rollouts_per_determinization.unwrap_or(DEFAULT_ROLLOUTS))
+        .map_err(|e| (422, e.to_string()))?;
+
+    if let Some(id) = r.search {
+        let mut kept = kept();
+        kept.retain(|_, (_, _, used)| used.elapsed() < KEEP_SEARCHES);
+        if kept.len() < MAX_KEPT_SEARCHES {
+            kept.insert(id, (search, max_depth, Instant::now()));
+        }
+    }
     serde_json::to_string(&result).map_err(|e| (500, e.to_string()))
 }
 

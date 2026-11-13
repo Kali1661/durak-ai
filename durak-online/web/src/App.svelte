@@ -505,6 +505,7 @@
     const limit = settings.hintThinkingMs
     const startedAt = performance.now()
     let rollouts = Math.min(500, settings.hintRollouts)
+    const passMs = longestPassMs(state)
     for (;;) {
       const res = await pool.run({
         state,
@@ -523,13 +524,21 @@
       if (limit > 0) {
         const remaining = limit - (performance.now() - startedAt)
         if (remaining < res.elapsedMs * 0.75) break
-        if (res.elapsedMs < remaining / 3) rollouts = Math.min(settings.hintRollouts, rollouts * 2)
-      } else {
+        if (res.elapsedMs < Math.min(remaining / 3, passMs)) rollouts = Math.min(settings.hintRollouts, rollouts * 2)
+      } else if (res.elapsedMs < passMs) {
         rollouts = Math.min(settings.hintRollouts, rollouts * 2)
       }
     }
     hint = { ...hint, status: 'done' }
   }
+
+  /**
+   * How long one search pass may grow to. In two-player games the engine
+   * keeps its search tree from pass to pass, so short passes cost nothing and
+   * use the thinking time to the end; with three players every pass starts
+   * afresh, so bigger passes are better.
+   */
+  const longestPassMs = state => (state?.hands?.length === 2 ? 400 : Infinity)
 
   /** Stop the suggestion search and keep what it found so far. */
   function stopHints() {
@@ -560,6 +569,7 @@
     // With no hidden cards left the result can be calculated, not just estimated.
     const exactly = solveExactly(state, limit)
     let rollouts = 1000
+    const passMs = longestPassMs(state)
     let problem = null
 
     for (;;) {
@@ -574,7 +584,7 @@
       if (!res.results.length) break
       const remaining = limit - (performance.now() - startedAt)
       if (remaining < res.elapsedMs * 0.75) break
-      if (res.elapsedMs < remaining / 3) rollouts = Math.min(20000, rollouts * 2)
+      if (res.elapsedMs < Math.min(remaining / 3, passMs)) rollouts = Math.min(20000, rollouts * 2)
     }
 
     const calculated = await exactly
@@ -1303,7 +1313,7 @@
       <div>
         <label class="field-label" for="s-hd">Suggestions: deals per pass</label>
         <input id="s-hd" class="field" type="number" inputmode="numeric" min={LIMITS.hintDeterminizations[0]} max={LIMITS.hintDeterminizations[1]} value={settings.hintDeterminizations} on:change={updateNumber('hintDeterminizations')} />
-        <p class="field-help">How many random deals of the hidden cards to try ({LIMITS.hintDeterminizations[0]} to {LIMITS.hintDeterminizations[1]}).</p>
+        <p class="field-help">How many random deals of the hidden cards to try ({LIMITS.hintDeterminizations[0]} to {LIMITS.hintDeterminizations[1]}). In two-player games the search deals afresh for every playout and runs for the whole thinking time, so this and the next setting hardly matter there.</p>
       </div>
       <div>
         <label class="field-label" for="s-hr">Suggestions: max playouts per deal</label>

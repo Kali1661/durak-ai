@@ -36,7 +36,7 @@ pub use endgame::solve_exact_reference;
 pub use endgame::{is_exactly_solvable, solve_exact, solve_exact_deal, ExactAction, ExactResult, ExactValue};
 
 pub use policy::Playout;
-pub use mcts::{
+pub use mcts::{Search, SharedTree, MAX_TREE_NODES,
     mcts_evaluate_actions, solve, ActionEval, MctsEval, SolveParams, SolveResult,
     MAX_DETERMINIZATIONS, MAX_ROLLOUTS, MAX_SEARCH_DEPTH,
 };
