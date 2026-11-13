@@ -1196,6 +1196,16 @@ impl GameState {
                 self.remove_from_hand(self.defender, &card)?;
                 self.table.push(Pile { attack: card.as_public(), defense: None });
                 self.redirect_attack(new_defender);
+                // The card passed on counts as the first of a new attack: its
+                // player may lay more of that rank before the answer, as an
+                // attacker may after any card (see `Action::Attack` above).
+                self.batch = 1;
+                if self.batch < self.config.cards_per_attack
+                    && self.can_add_pile()
+                    && self.hand_size(self.attacker) > 0
+                {
+                    self.phase = Phase::Adding;
+                }
                 Ok(())
             }
             (Phase::Defending, Action::ReflectTrump { card }) => {

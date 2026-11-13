@@ -735,3 +735,35 @@ fn the_attack_size_must_be_between_one_and_six() {
         assert!(config.validate().is_err(), "{bad}");
     }
 }
+
+#[test]
+fn passing_the_attack_on_may_be_followed_by_more_cards_of_the_rank() {
+    // P0 leads a jack; P1 passes it back with a jack and holds one more.
+    let hands = || {
+        vec![
+            vec![c(Spades, Jack), c(Hearts, Jack), c(Clubs, Ace), c(Diamonds, Queen), c(Spades, King)],
+            vec![c(Clubs, Jack), c(Diamonds, Jack), c(Clubs, King), c(Diamonds, King), c(Diamonds, Ace), c(Spades, Ace)],
+        ]
+    };
+    let mut pos = Pos::new(hands());
+    pos.reflecting = true;
+    pos.cards_per_attack = 6;
+    let mut s = pos.build();
+    play(&mut s, &[attack(c(Spades, Jack)), Action::LetDefend, Action::Reflect { card: c(Clubs, Jack) }]);
+    // The attack is P1's now, and they may add before P0 answers.
+    assert_eq!((s.attacker, s.defender, s.phase), (P1, P0, Phase::Adding));
+    assert_eq!(s.actor_to_move(), P1);
+    play(&mut s, &[attack(c(Diamonds, Jack)), Action::LetDefend]);
+    assert_eq!(s.table.len(), 3);
+    assert_eq!((s.phase, s.actor_to_move()), (Phase::Defending, P0));
+    // P0 can still pass all three on with the fourth jack.
+    assert!(s.legal_actions().iter().any(|a| a.same_move(&Action::Reflect { card: c(Hearts, Jack) })));
+
+    // One card at a time: the answer comes straight after the pass, as before.
+    let mut pos = Pos::new(hands());
+    pos.reflecting = true;
+    pos.cards_per_attack = 1;
+    let mut s = pos.build();
+    play(&mut s, &[attack(c(Spades, Jack)), Action::Reflect { card: c(Clubs, Jack) }]);
+    assert_eq!((s.phase, s.actor_to_move()), (Phase::Defending, P0));
+}

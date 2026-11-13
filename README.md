@@ -50,7 +50,9 @@ for - 1, 2, 5 or 10 seconds, a custom time, or unlimited until you stop it.
   table, such as a pair of aces - before the defender answers. With *any*, all
   four nines can go down at once. When entering an opponent's attack in a real
   game, enter each card: the app assumes they added nothing more, and if they
-  did, press *They added more cards*.
+  did, press *They added more cards*. The same goes for a defender who passes
+  the attack on: the card they pass with starts their own attack, and they may
+  lay more of that rank before the answer.
 - At most six attack cards per trick, and never more unanswered cards than the
   defender holds.
 - Throw-in: every attacker may add cards whose rank is already on the table.

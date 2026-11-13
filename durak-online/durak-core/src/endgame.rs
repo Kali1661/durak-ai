@@ -482,6 +482,16 @@ impl Pos {
         self.phase = ATTACKING;
     }
 
+    /// After a card was laid to pass the attack on (the new attacker is
+    /// already set): it counts as the first card of a new attack, so more may
+    /// follow before the answer, as in the engine.
+    fn passed_on(&mut self, rules: &Rules) {
+        self.batch = 1;
+        let a = self.attacker as usize;
+        let more = self.batch < rules.cards_per_attack && self.can_add_pile(rules) && self.hand[a] != 0;
+        self.phase = if more { ADDING } else { DEFENDING };
+    }
+
     /// Lay down `card` as the attacker; the defender answers next unless more
     /// may and can be added.
     fn lay(&self, card: u64, rules: &Rules) -> Pos {
@@ -572,7 +582,7 @@ impl Pos {
                         p.atk |= card;
                         p.open |= card;
                         p.attacker = d as u8;
-                        p.batch = 0;
+                        p.passed_on(rules);
                         out.push((cost(card), p));
                     }
                     if rules.trump_reflecting
@@ -1085,7 +1095,7 @@ impl Pos {
                             p.atk |= card;
                             p.open |= card;
                             p.attacker = d as u8;
-                            p.batch = 0;
+                            p.passed_on(rules);
                             out.push((worth(card, trump_cards) - 8, code(REFLECT, card), p));
                         }
                         if rules.trump_reflecting

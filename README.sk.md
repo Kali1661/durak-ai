@@ -54,7 +54,9 @@ kým hľadanie nezastavíš.
   stole, napríklad dvojicu es - skôr, než obranca odpovie. Pri *Any* môžu ísť
   na stôl naraz všetky štyri deviatky. Pri zadávaní súperovho útoku v skutočnej
   hre zadaj každú kartu: aplikácia predpokladá, že už nič nepridal, a ak áno,
-  stlač *They added more cards*.
+  stlač *They added more cards*. To isté platí pre obrancu, ktorý útok posunie
+  ďalej: karta, ktorou ho posunul, začína jeho vlastný útok a pred odpoveďou
+  môže priložiť ďalšie karty tej istej hodnoty.
 - Najviac šesť útočných kariet v jednom kole a nikdy viac nepobitých kariet,
   než má obranca v ruke.
 - Prihadzovanie: každý útočník môže pridať karty, ktorých hodnota už je na
