@@ -20,6 +20,8 @@ include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 const FIRST_PORT: u16 = 8787;
 const DEFAULT_ROLLOUTS: u32 = 1000;
 const DEFAULT_MAX_DEPTH: u32 = 500;
+/// Positions searched per deal when deals are solved exactly during a search.
+const EXACT_DEAL_NODES: u64 = 2_000_000;
 /// The browser engine stops at 6 million positions for memory; natively there is room for more.
 const MAX_EXACT_NODES: u64 = 12_000_000;
 /// The app sizes exact searches for the browser engine's speed, which the
@@ -153,6 +155,13 @@ fn run_solve(body: &str) -> Result<String, (u16, String)> {
         max_depth: r.max_depth.unwrap_or(DEFAULT_MAX_DEPTH),
         // As in the browser engine (see durak-wasm).
         shared_tree: true,
+        // Four or fewer cards left to draw: solve each deal exactly where it
+        // fits in EXACT_DEAL_NODES positions (falls back to playouts if not).
+        exact_nodes: EXACT_DEAL_NODES,
+        exact_stock: 4,
+        // Once the stock is empty, score the hands (trumps, cards that cannot
+        // be beaten) instead of playing on.
+        cutoff: true,
         ..SolveParams::default()
     };
     let result = solve(&r.state, params, r.seed.unwrap_or_else(seed)).map_err(|e| (422, e.to_string()))?;

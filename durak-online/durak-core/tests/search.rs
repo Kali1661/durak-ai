@@ -208,6 +208,9 @@ fn deals_with_few_cards_left_are_solved_exactly() {
     assert!(r.exact_deals > 0, "no deal was solved exactly");
     // Exact values are 0, 1/2 or 1 per deal, so pooled scores stay in range.
     assert!(r.actions.iter().all(|a| (0.0..=1.0).contains(&a.score)));
+    // Also with one tree over all deals: near the end each deal is solved on its own.
+    let r = solve(&s, SolveParams { shared_tree: true, cutoff: true, ..p }, 9).unwrap();
+    assert!(r.exact_deals > 0, "no deal was solved exactly with the shared tree on");
 
     // Off by default.
     let r = solve(&s, SolveParams { determinizations: 4, rollouts: 100, ..SolveParams::default() }, 9).unwrap();

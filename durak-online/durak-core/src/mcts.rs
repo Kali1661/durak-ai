@@ -417,7 +417,8 @@ pub struct SolveParams {
     #[serde(default)]
     pub candidates_min_stock: u8,
     /// Search one tree over all the deals instead of one tree per deal (see
-    /// [`shared_tree_evaluate`]); exact solving of deals does not apply then.
+    /// [`shared_tree_evaluate`]). Once exact solving of deals applies (see
+    /// `exact_stock`), each deal is searched on its own again.
     #[serde(default)]
     pub shared_tree: bool,
 }
@@ -530,6 +531,11 @@ pub fn solve(state: &GameState, params: SolveParams, seed: u64) -> Result<SolveR
         params.shared_tree = false;
         params.candidates = 0;
         params.cutoff = false;
+    }
+    if exact {
+        // Near the end of the deck: solve each deal exactly where it is small
+        // enough, and search the rest one tree per deal.
+        params.shared_tree = false;
     }
     if params.shared_tree {
         // One tree, a fresh deal for every playout: as many playouts as the

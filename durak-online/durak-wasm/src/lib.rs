@@ -13,6 +13,8 @@ use wasm_bindgen::prelude::*;
 
 const DEFAULT_ROLLOUTS: u32 = 1000;
 const DEFAULT_MAX_DEPTH: u32 = 500;
+/// Positions searched per deal when deals are solved exactly during a search.
+const EXACT_DEAL_NODES: u64 = 2_000_000;
 const EXPLORATION: f64 = 1.41;
 
 fn err(e: EngineError) -> JsValue {
@@ -187,8 +189,14 @@ pub fn solve(req: JsValue) -> Result<JsValue, JsValue> {
         // in 300 arena games it was the durak 41% of the time against the
         // separate trees, at the same number of playouts.
         shared_tree: true,
-        // Playout style, exact solving of small deals, priors and the
-        // stock-empty cutoff: the engine's tuned defaults.
+        // Four or fewer cards left to draw: solve each deal exactly where it
+        // fits in EXACT_DEAL_NODES positions (falls back to playouts if not).
+        exact_nodes: EXACT_DEAL_NODES,
+        exact_stock: 4,
+        // Once the stock is empty, score the hands (trumps, cards that cannot
+        // be beaten) instead of playing on.
+        cutoff: true,
+        // Everything else (playout style, pruning, priors): the engine's defaults.
         ..SolveParams::default()
     };
     let seed = req.seed.unwrap_or_else(random_seed);
