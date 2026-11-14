@@ -10,13 +10,15 @@
 //!    they probably have no higher card of that suit"): the weight that
 //!    follows from where the cards really were;
 //! 2. how often an opponent who could beat the cards picked them up anyway,
-//!    by how many cards were left to draw.
+//!    by how many cards were left to draw;
+//! 4. how often the imagined player of the playouts (`policy`) would have
+//!    made the move the real player made, and where the two differ most.
 //!
 //! `cargo run --release --example realgames -- <export.json> [--list]`
 
 use std::collections::HashMap;
 
-use durak_core::{Action, Beliefs, Card, CardId, Evidence, GameState, Phase, PlayerId, Rank, Strength, Suit};
+use durak_core::{policy, Action, Beliefs, Card, CardId, Evidence, GameState, Phase, PlayerId, Rank, Strength, Suit};
 use serde_json::Value;
 
 const KINDS: [Evidence; 6] = [
@@ -139,6 +141,50 @@ fn resolve(states: &[GameState], actions: &[Option<Action>], actors: &[Option<Pl
     place
 }
 
+/// What kind of move this is, for the table of differences.
+fn kind(s: &GameState, a: &Action) -> &'static str {
+    let trump = |c: &Card| c.id().is_some_and(|(suit, _)| suit == s.trump);
+    let named = |c: &Card, t: &'static str, p: &'static str| if trump(c) { t } else { p };
+    match a {
+        Action::Attack { card } if s.table.is_empty() => named(card, "lead a trump", "lead a plain card"),
+        Action::Attack { card } => named(card, "add a trump", "add a plain card"),
+        Action::PassAttack | Action::LetDefend => "add nothing",
+        Action::Defend { card, .. } => named(card, "beat with a trump", "beat with a plain card"),
+        Action::Take => "take",
+        Action::Reflect { card } => named(card, "pass on with a trump", "pass on"),
+        Action::ReflectTrump { .. } => "show a trump",
+        Action::Throw { card: Some(card) } => named(card, "throw in a trump", "throw in a plain card"),
+        Action::Throw { card: None } => "throw in nothing",
+    }
+}
+
+/// [who: me, opponent][stock bucket] -> (real kind, imagined kind) -> count.
+type Mimic = [[HashMap<(&'static str, &'static str), u32>; 4]; 2];
+
+/// Compare the real `action` in `state` (the mover's hand fully known) with
+/// what the heuristic player would do.
+fn compare(mimic: &mut Mimic, who: usize, state: &GameState, action: &Action) {
+    let legal = state.legal_actions();
+    if legal.len() < 2 || !legal.iter().any(|a| a.same_move(action)) {
+        return;
+    }
+    let Some(imagined) = policy::heuristic_action(state) else { return };
+    let bucket = match state.stock.len() {
+        0 => 3,
+        1..=4 => 2,
+        5..=8 => 1,
+        _ => 0,
+    };
+    let real = kind(state, action);
+    let mut other = kind(state, &imagined);
+    if real == other && !imagined.same_move(action) {
+        other = "another card";
+    } else if real == other {
+        other = "";
+    }
+    *mimic[who][bucket].entry((real, other)).or_default() += 1;
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(path) = args.iter().find(|a| !a.starts_with("--")) else {
@@ -163,6 +209,7 @@ fn main() {
     let mut by_beater = [[(0u32, 0u32); 4]; 4];
     let mut by_card = [[(0u32, 0u32); 3]; 4];
     let mut used_games = 0;
+    let mut mimic: Mimic = Default::default();
 
     for g in games {
         if g["mode"] != "analyse" || g["initial"]["hands"].as_array().map_or(0, Vec::len) != 2 {
@@ -183,6 +230,11 @@ fn main() {
         let group = groups.iter().position(|x| *x == rating).unwrap_or(4);
 
         for i in 0..actions.len() {
+            if let (Some(action), Some(PlayerId::P0)) = (&actions[i], actors[i]) {
+                if states[i].actor_to_move() == PlayerId::P0 {
+                    compare(&mut mimic, 0, &states[i], action);
+                }
+            }
             let (Some(action), Some(PlayerId::P1)) = (&actions[i], actors[i]) else { continue };
             let before = &states[i];
             if before.actor_to_move() != PlayerId::P1 {
@@ -192,6 +244,17 @@ fn main() {
             let hidden_in_hand = unknowns(&before.hands[1]);
             let hidden_in_stock = unknowns(&before.stock);
             let in_hand = place.values().filter(|p| **p == Place::Hand).count();
+
+            // 4. Would the imagined player have made this move?
+            if in_hand == hidden_in_hand {
+                let mut open = before.clone();
+                let mut known = place.iter().filter(|(_, p)| **p == Place::Hand).map(|(c, _)| *c);
+                for card in open.hands[1].iter_mut().filter(|c| c.id().is_none()) {
+                    let (suit, rank) = known.next().unwrap();
+                    *card = Card::private(suit, rank);
+                }
+                compare(&mut mimic, 1, &open, action);
+            }
 
             // 1. The rules of `belief`.
             if hidden_in_hand > 0 && hidden_in_stock > 0 && !place.is_empty() {
@@ -306,5 +369,34 @@ fn main() {
     println!("  {:<22} {:>14} {:>16} {:>16}", "cards left to draw", "plain to jack", "plain Q or more", "a trump");
     for (name, row) in ["12 or more", "6 to 11", "1 to 5", "none"].iter().zip(by_card) {
         println!("  {name:<22} {:>14} {:>16} {:>16}", show(row[0]), show(row[1]), show(row[2]));
+    }
+
+    println!("
+4. Would the imagined player have made the real player's move?");
+    for (who, name) in ["my decisions", "the opponent's"].iter().enumerate() {
+        let sum = |b: std::ops::Range<usize>| {
+            let total: u32 = b.clone().flat_map(|i| mimic[who][i].values()).sum();
+            let same: u32 = b.flat_map(|i| mimic[who][i].iter()).filter(|(k, _)| k.1.is_empty()).map(|(_, v)| *v).sum();
+            format!("{:.1}% of {total}", 100.0 * f64::from(same) / f64::from(total.max(1)))
+        };
+        println!("  the same move, {name}: with cards left to draw {}, with none {}", sum(0..3), sum(3..4));
+    }
+    for (who, name) in ["my moves", "the opponent's moves (hand known with hindsight)"].iter().enumerate() {
+        println!("  {name}");
+        for (bucket, stock) in ["9 or more left to draw", "5 to 8 left", "1 to 4 left", "nothing left"].iter().enumerate() {
+            let m = &mimic[who][bucket];
+            let total: u32 = m.values().sum();
+            if total == 0 {
+                continue;
+            }
+            let same: u32 = m.iter().filter(|(k, _)| k.1.is_empty()).map(|(_, v)| *v).sum();
+            println!("    {stock}: {total} decisions, the same move in {:.0}%", 100.0 * f64::from(same) / f64::from(total));
+            let mut rows: Vec<_> = m.iter().filter(|(k, _)| !k.1.is_empty()).collect();
+            rows.sort_by_key(|(k, v)| (std::cmp::Reverse(**v), k.0, k.1));
+            for ((real, imagined), n) in rows.into_iter().take(10) {
+                let of: u32 = m.iter().filter(|(k, _)| k.0 == *real).map(|(_, v)| *v).sum();
+                println!("      {n:>4}  really \"{real}\" ({:.0}% of the {of} times), imagined: {imagined}", 100.0 * f64::from(*n) / f64::from(of));
+            }
+        }
     }
 }

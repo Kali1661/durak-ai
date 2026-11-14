@@ -197,7 +197,7 @@ fn tree_search_requires_a_fully_known_state() {
 fn deals_with_few_cards_left_are_solved_exactly() {
     // Late in a game with two cards left to draw.
     let config = GameConfig { deck_size: 24, num_players: 2, ..GameConfig::default() };
-    let mut s = GameState::new_computer_game(3, config).unwrap();
+    let mut s = GameState::new_computer_game(4, config).unwrap();
     while s.stock.len() > 2 {
         let a = policy::heuristic_action(&s).unwrap();
         s.apply(&a).unwrap();

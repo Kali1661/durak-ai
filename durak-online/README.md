@@ -37,7 +37,7 @@ cargo run --release -p durak-core --example calibrate -- durak-ai-games.json
 cargo run --release -p durak-core --example realgames -- durak-ai-games.json
 ```
 
-`calibrate` searches every position of your finished real games again and compares the win percentages with how the games ended; give it several engine variants to see which reads real opponents best. `realgames` shows what your opponents actually did: how good each rule for guessing their hand is, and how often they picked up cards they could have beaten.
+`calibrate` searches every position of your finished real games again and compares the win percentages with how the games ended; give it several engine variants to see which reads real opponents best. `realgames` shows what your opponents actually did: how good each rule for guessing their hand is, how often they picked up cards they could have beaten, and how often the imagined player of the search would have made the move that was really made.
 
 Finding mistakes in your own games: export them from the Games panel ("Export all (JSON)"), then
 

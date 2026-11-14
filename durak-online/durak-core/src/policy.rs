@@ -8,14 +8,15 @@
 //! The heuristic player gives every legal move a cost and plays the cheapest,
 //! the way a sensible beginner would: lead and throw in low cards, beat with
 //! the lowest card that works, keep trumps while the stock is large and take
-//! a small pile rather than spend one; once nothing is left to draw, add
-//! everything that can be added. Now and then it plays a random move
+//! a small pile rather than spend one. In a two-player game it adds nothing
+//! before the defender answers, every plain card once they have beaten the
+//! attack or are taking it, and - once nothing is left to draw - every card. Now and then it plays a random move
 //! instead, so playouts still cover other lines.
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{Action, Card, GameState, Rank, Suit};
+use crate::{Action, Card, GameState, Phase, Rank, Suit};
 
 /// How playouts choose moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -43,6 +44,13 @@ pub struct Style {
     /// version 0.3.2. Normally it then adds every card it can.
     #[serde(default)]
     pub hold_trumps: bool,
+    /// Two players: the heuristic player adds cards below the queen at any
+    /// moment of an attack, as before version
+    /// 0.3.3 (every card with nothing left to draw). Normally it adds
+    /// nothing before the defender answers and every plain card once they
+    /// have beaten the attack or are taking it.
+    #[serde(default)]
+    pub old_attack: bool,
 }
 
 /// Chance that the heuristic player makes a random move instead.
@@ -59,20 +67,34 @@ fn worth(card: &Card, trump: Suit) -> i32 {
 /// Above the worth of any card.
 const ALL_CARDS: i32 = 99;
 
-/// Cards worth less than this are thrown in rather than kept.
-fn throw_limit(state: &GameState) -> i32 {
-    if state.stock.is_empty() {
-        // Nothing left to draw: get rid of every card that can go - in a
-        // two-player game the trumps too. Measured against perfect play
-        // (`examples/evalfit.rs`), games played out this way name the winner
-        // more often than with the trumps held back.
-        if state.num_players() == 2 {
-            ALL_CARDS
-        } else {
-            Rank::Ace as i32 + 1
-        }
-    } else {
-        Rank::Queen as i32
+/// With cards left to draw, trumps worth less than this (up to the jack)
+/// are added once the defender has beaten the attack.
+pub(crate) const ADD_AFTER_BEAT: i32 = TRUMP_BONUS + Rank::Queen as i32;
+
+/// With cards left to draw, every plain card is thrown in for a defender
+/// who is taking, and no trump.
+pub(crate) const THROW_IN: i32 = Rank::Ace as i32 + 1;
+
+/// Cards worth less than this are added to an attack rather than kept.
+///
+/// Two players: nothing is added before the defender answers - whatever
+/// could be added then can still follow once they have beaten the card or
+/// taken it. Recorded real games (`examples/realgames.rs`) show the same:
+/// a card is added before the answer about one time in eight, and after the
+/// attack is beaten nine times in ten, whatever its rank. Against perfect
+/// play (`examples/playfit.rs`) this player gives away a better result with
+/// one or two cards left to draw in 2% of its moves; adding only cards
+/// below the queen at any moment, as before version 0.3.3, in 7%.
+fn add_limit(state: &GameState) -> i32 {
+    let two = state.num_players() == 2;
+    match (state.stock.is_empty(), state.phase) {
+        (_, Phase::Adding) if two => 0,
+        // Nothing left to draw: get rid of every card that can go.
+        (true, _) if two => ALL_CARDS,
+        (true, _) => Rank::Ace as i32 + 1,
+        (false, _) if !two => Rank::Queen as i32,
+        (false, Phase::Throwing) => THROW_IN,
+        (false, _) => ADD_AFTER_BEAT,
     }
 }
 
@@ -101,7 +123,7 @@ pub fn move_cost(state: &GameState, action: &Action) -> i32 {
         Action::Attack { card } if state.table.is_empty() => worth(card, trump),
         // Adding to an attack or throwing in: only cards worth losing.
         Action::Attack { card } | Action::Throw { card: Some(card) } => {
-            worth(card, trump) - throw_limit(state)
+            worth(card, trump) - add_limit(state)
         }
         Action::PassAttack | Action::Throw { card: None } | Action::LetDefend => 0,
         Action::Defend { card, .. } => worth(card, trump),

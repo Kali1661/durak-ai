@@ -1,7 +1,7 @@
 //! How well do the imagined players play near the end of the stock?
 //!
 //! ```text
-//! cargo run --release -p durak-core --example playfit -- [games] [deck] [positions per solve] [most cards left to draw]
+//! cargo run --release -p durak-core --example playfit -- [games] [deck] [positions per solve] [most cards left to draw] [fewest]
 //! ```
 //!
 //! Plays two-player games with the heuristic playout player and stops at
@@ -23,6 +23,7 @@ use durak_core::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
+/// `Style::old_attack` settings compared: the default, and as before 0.3.3.
 const KEEPS: [bool; 2] = [false, true];
 
 struct Sample {
@@ -54,6 +55,13 @@ fn kind(s: &GameState, a: &Action) -> &'static str {
                 "lead a plain card"
             }
         }
+        Action::Attack { card } if s.phase == Phase::Adding => {
+            if trump(card) {
+                "add a trump before the answer"
+            } else {
+                "add a plain card before the answer"
+            }
+        }
         Action::Attack { card } => {
             if trump(card) {
                 "add a trump"
@@ -61,7 +69,8 @@ fn kind(s: &GameState, a: &Action) -> &'static str {
                 "add a plain card"
             }
         }
-        Action::PassAttack | Action::LetDefend => "add nothing",
+        Action::LetDefend => "wait for the answer",
+        Action::PassAttack => "add nothing",
         Action::Defend { card, .. } => {
             if trump(card) {
                 "beat with a trump"
@@ -106,6 +115,7 @@ fn main() {
     let deck: usize = args.get(1).map_or(24, |s| s.parse().unwrap());
     let nodes: u64 = args.get(2).map_or(2_000_000, |s| s.parse().unwrap());
     let max_stock: usize = args.get(3).map_or(6, |s| s.parse().unwrap());
+    let min_stock: usize = args.get(4).map_or(1, |s| s.parse().unwrap());
     let config = GameConfig {
         deck_size: deck,
         num_players: 2,
@@ -144,7 +154,7 @@ fn main() {
                         let acts = s.legal_actions();
                         let trick_start = s.phase == Phase::Attacking && s.table.is_empty();
                         let one_to_beat = s.phase == Phase::Defending && s.table.len() == 1 && s.table[0].defense.is_none();
-                        if (1..=max_stock).contains(&stock) && (trick_start || one_to_beat) && rng.gen_bool(0.5) {
+                        if (min_stock..=max_stock).contains(&stock) && (trick_start || one_to_beat) && rng.gen_bool(0.5) {
                             let open = reveal(&s);
                             match solve_exact_deal(&open, nodes).ok().flatten() {
                                 Some(r) if r.value.is_some() && r.actions.iter().all(|a| a.value.is_some()) => {
@@ -153,7 +163,7 @@ fn main() {
                                             stock,
                                             y: f64::from(rank(r.value.unwrap())) / 2.0,
                                             playouts: KEEPS.map(|keep| {
-                                                playout_share(&open, 200, &mut rng, Style { hold_trumps: keep, ..Style::default() }).unwrap_or(0.5)
+                                                playout_share(&open, 200, &mut rng, Style { old_attack: keep, ..Style::default() }).unwrap_or(0.5)
                                             }),
                                         });
                                     } else {
@@ -256,8 +266,8 @@ fn main() {
         unsolved.into_inner().unwrap()
     );
 
-    println!("\n1. Playouts against perfect play: log loss as the players are, and holding trumps back at the end");
-    for (name, lo, hi) in [("all", 1, 99), ("1-2 left", 1, 2), ("3-4 left", 3, 4), ("5+ left", 5, 99)] {
+    println!("\n1. Playouts against perfect play: log loss as the players are, and attacking as before 0.3.3");
+    for (name, lo, hi) in [("all", 0, 99), ("none left", 0, 0), ("1-2 left", 1, 2), ("3-4 left", 3, 4), ("5+ left", 5, 99)] {
         let part: Vec<&Sample> = samples.iter().filter(|s| s.stock >= lo && s.stock <= hi).collect();
         if part.is_empty() {
             continue;

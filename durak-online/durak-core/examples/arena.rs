@@ -12,7 +12,8 @@
 //! `d` and `p` give that engine its own deals and playouts per search).
 //! `inf=1` guesses the opponent's hand; `uneq=1`, `hold=1` and `oldinf=1`
 //! bring back how hands were scored, how the imagined players added cards
-//! and how hands were guessed before version 0.3.2, for comparison.
+//! and how hands were guessed before version 0.3.2, for comparison; `oldatk=1`
+//! how the imagined players attacked before 0.3.3.
 //!
 //! `match` plays every deal once per seat for A, so both sides get the same
 //! cards, and reports A's results with a 95% margin. In two-player games both
@@ -65,6 +66,8 @@ struct Search {
     hold: bool,
     /// Hand-guessing as before 0.3.2: takes add up, at strength 0.5.
     oldinf: bool,
+    /// `Style::old_attack`: the imagined players attack as before 0.3.3.
+    oldatk: bool,
 }
 
 /// `random`, `rules`, `mcts` (random playouts), `mcts-h` (heuristic
@@ -78,7 +81,7 @@ fn engine(spec: &str) -> Engine {
         "mcts-h" => Playout::Heuristic,
         other => panic!("unknown engine {other}; use random, rules, mcts or mcts-h"),
     };
-    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false, uneq: false, hold: false, oldinf: false };
+    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false, uneq: false, hold: false, oldinf: false, oldatk: false };
     for kv in opts.split(',').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').expect("settings look like key=value");
         match k {
@@ -96,6 +99,7 @@ fn engine(spec: &str) -> Engine {
             "uneq" => e.uneq = v == "1",
             "hold" => e.hold = v == "1",
             "oldinf" => e.oldinf = v == "1",
+            "oldatk" => e.oldatk = v == "1",
             other => panic!("unknown setting {other}"),
         }
     }
@@ -149,7 +153,7 @@ fn exact_choice(state: &GameState, effort: Effort, seed: u64) -> Option<Action> 
         return Some(r.actions[0].action.clone());
     }
     // The same search for both engines here, so the endgame is a level field.
-    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false, uneq: false, hold: false, oldinf: false };
+    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false, uneq: false, hold: false, oldinf: false, oldatk: false };
     Some(search(state, plain, effort, seed, Some(&safe), None))
 }
 
@@ -166,7 +170,7 @@ fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<
         candidates: e.candidates,
         candidates_min_stock: e.kstock,
         shared_tree: e.tree,
-        style: durak_core::Style { score_unequal: e.uneq, hold_trumps: e.hold },
+        style: durak_core::Style { score_unequal: e.uneq, hold_trumps: e.hold, old_attack: e.oldatk },
         ..SolveParams::default()
     };
     let r = durak_core::Search::new(state, params, seed)

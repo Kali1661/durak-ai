@@ -1031,11 +1031,22 @@ impl Pos {
         let a = self.attacker as usize;
         let d = 1 - a;
         let trump_cards = RANKS << (rules.trump * 13);
-        // Cards worth less than this are added to an attack rather than kept.
-        let limit = match self.stock {
-            0 if rules.style.hold_trumps => 15,
-            0 => 99,
-            _ => 12,
+        // Cards worth less than this are added to an attack rather than
+        // kept: before the defender answers, after they have beaten the
+        // cards, and when they are taking (see `policy::add_limit`).
+        let (before, after, thrown) = if rules.style.old_attack {
+            let limit = match self.stock {
+                0 if rules.style.hold_trumps => 15,
+                0 => 99,
+                _ => 12,
+            };
+            (limit, limit, limit)
+        } else {
+            match self.stock {
+                0 if rules.style.hold_trumps => (0, 15, 15),
+                0 => (0, 99, 99),
+                _ => (0, crate::policy::ADD_AFTER_BEAT, crate::policy::THROW_IN),
+            }
         };
 
         match self.phase {
@@ -1052,7 +1063,14 @@ impl Pos {
                     let card = playable & playable.wrapping_neg();
                     playable ^= card;
                     let w = worth(card, trump_cards);
-                    out.push((if leading { w } else { w - limit }, code(LAY, card), self.lay(card, rules)));
+                    let cost = if leading {
+                        w
+                    } else if self.phase == ADDING {
+                        w - before
+                    } else {
+                        w - after
+                    };
+                    out.push((cost, code(LAY, card), self.lay(card, rules)));
                 }
                 if self.phase == ADDING {
                     let mut p = *self;
@@ -1139,7 +1157,7 @@ impl Pos {
                         p.hand[a] ^= card;
                         p.atk |= card;
                         p.open |= card;
-                        out.push((worth(card, trump_cards) - limit, code(THROW, card), p));
+                        out.push((worth(card, trump_cards) - thrown, code(THROW, card), p));
                     }
                 }
                 let mut p = *self;

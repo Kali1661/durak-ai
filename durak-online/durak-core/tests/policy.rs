@@ -57,21 +57,45 @@ fn spends_the_trump_once_nothing_is_left_to_draw() {
 }
 
 #[test]
-fn throws_in_low_cards_and_keeps_trumps() {
-    let mut pos = Pos::new(vec![
-        vec![c(Clubs, Seven), c(Hearts, Seven)],
-        vec![c(Diamonds, Ace), c(Diamonds, King), c(Diamonds, Queen)],
-    ]);
-    pos.table = vec![pile(c(Spades, Seven), None)];
-    pos.phase = Phase::Throwing;
-    let s = with_stock(pos, 10);
-    assert_eq!(chosen(&s), throw(c(Clubs, Seven)));
+fn throws_in_plain_cards_and_keeps_trumps() {
+    let taking = |hand: Vec<Card>| {
+        let mut pos = Pos::new(vec![hand, vec![c(Diamonds, Ace), c(Diamonds, King), c(Diamonds, Queen)]]);
+        pos.table = vec![pile(c(Spades, Ace), None)];
+        pos.phase = Phase::Throwing;
+        with_stock(pos, 10)
+    };
+    // Even an ace goes to a defender who is picking up; a trump does not.
+    assert_eq!(chosen(&taking(vec![c(Clubs, Ace), c(Hearts, Ace)])), throw(c(Clubs, Ace)));
+    assert_eq!(chosen(&taking(vec![c(Hearts, Ace)])), Action::Throw { card: None });
+}
 
-    let mut pos = Pos::new(vec![vec![c(Hearts, Seven)], vec![c(Diamonds, Ace), c(Diamonds, King)]]);
-    pos.table = vec![pile(c(Spades, Seven), None)];
-    pos.phase = Phase::Throwing;
-    let s = with_stock(pos, 10);
-    assert_eq!(chosen(&s), Action::Throw { card: None });
+#[test]
+fn adds_nothing_before_the_defender_answers() {
+    for stock in [10, 0] {
+        let mut pos = Pos::new(vec![
+            vec![c(Spades, Seven), c(Clubs, Seven), c(Diamonds, Seven)],
+            vec![c(Diamonds, Ace), c(Diamonds, King), c(Diamonds, Queen)],
+        ]);
+        pos.cards_per_attack = 6;
+        let mut s = with_stock(pos, stock);
+        s.apply(&attack(c(Spades, Seven))).unwrap();
+        assert_eq!(s.phase, Phase::Adding);
+        assert_eq!(chosen(&s), Action::LetDefend, "{stock} cards left to draw");
+    }
+}
+
+#[test]
+fn adds_plain_cards_of_any_rank_once_the_attack_is_beaten() {
+    let beaten = |hand: Vec<Card>, stock: usize| {
+        let mut pos = Pos::new(vec![hand, vec![c(Diamonds, Ace), c(Diamonds, King), c(Diamonds, Queen)]]);
+        pos.table = vec![pile(c(Spades, King), Some(c(Spades, Ace)))];
+        pos.phase = Phase::Attacking;
+        with_stock(pos, stock)
+    };
+    assert_eq!(chosen(&beaten(vec![c(Clubs, Ace), c(Clubs, Six)], 10)), attack(c(Clubs, Ace)));
+    // A high trump is kept while there are cards to draw, and goes at the end.
+    assert_eq!(chosen(&beaten(vec![c(Hearts, King), c(Clubs, Six)], 10)), Action::PassAttack);
+    assert_eq!(chosen(&beaten(vec![c(Hearts, King), c(Clubs, Six)], 0)), attack(c(Hearts, King)));
 }
 
 #[test]

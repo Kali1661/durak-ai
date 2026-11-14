@@ -13,7 +13,7 @@
 //!
 //! A variant is `name` or `name:key=value,...` with the keys
 //! `inf=0` (do not guess the opponent's hand), `unequal=1` (score hands of
-//! any size, as before 0.3.2), `hold=1` (see `policy::Style`), and the
+//! any size, as before 0.3.2), `hold=1` and `oldattack=1` (see `policy::Style`), and the
 //! strengths of the evidence about the opponent's hand `take=`, `taketrump=`,
 //! `lead=`, `leadtrump=`, `stoplow=`, `stophigh=` (1 = ignore), `stacks=1` (takes add up, as before 0.3.2).
 //! `--every N` checks only every Nth position, for a quicker look.
@@ -43,6 +43,7 @@ fn variant(spec: &str) -> Variant {
             "inf" => v.inf = f != 0.0,
             "unequal" => v.params.style.score_unequal = f != 0.0,
             "hold" => v.params.style.hold_trumps = f != 0.0,
+            "oldattack" => v.params.style.old_attack = f != 0.0,
             "take" => v.strength.take_same_suit = f,
             "taketrump" => v.strength.take_trump = f,
             "lead" => v.strength.lead_lower = f,
