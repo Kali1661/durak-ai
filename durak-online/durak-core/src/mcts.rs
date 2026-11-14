@@ -173,7 +173,7 @@ pub fn mcts_evaluate_actions(
             path.push(child);
         }
 
-        let (value, cut_off) = play_out(&mut s, &mut rng, playout, cutoff, max_depth)?;
+        let (value, cut_off) = play_out(&mut s, &mut rng, playout, cutoff, max_depth, params.style)?;
 
         for idx in path {
             let node = &mut nodes[idx];
@@ -216,11 +216,12 @@ fn play_out(
     playout: Playout,
     cutoff: bool,
     max_depth: u32,
+    style: policy::Style,
 ) -> Result<([f64; MAX_PLAYERS], bool), EngineError> {
     // Two players and the heuristic player: the same playout on a compact
     // copy of the position, many times faster (see `endgame`).
     if playout == Playout::Heuristic {
-        if let Some((v, cut_off)) = crate::endgame::fast_playout(s, rng, cutoff, max_depth) {
+        if let Some((v, cut_off)) = crate::endgame::fast_playout(s, rng, cutoff, max_depth, style) {
             let mut value = [0.5; MAX_PLAYERS];
             value[..2].copy_from_slice(&v);
             return Ok((value, cut_off));
@@ -228,7 +229,7 @@ fn play_out(
     }
     let mut depth = 0u32;
     while !s.is_terminal() && depth < max_depth {
-        if cutoff && s.stock.is_empty() && s.phase == Phase::Attacking && s.table.is_empty() {
+        if cutoff && s.stock.is_empty() && s.phase == Phase::Attacking && s.table.is_empty() && (style.score_unequal || eval::in_range(s)) {
             let p = eval::attacker_wins(s);
             let mut value = [0.5; MAX_PLAYERS];
             value[s.attacker.index()] = p;
@@ -412,7 +413,7 @@ impl SharedTree {
                 path.push(cur);
             }
 
-            let (value, cut_off) = play_out(&mut s, rng, playout, cutoff, max_depth)?;
+            let (value, cut_off) = play_out(&mut s, rng, playout, cutoff, max_depth, self.params.style)?;
             for idx in path {
                 let node = &mut nodes[idx];
                 node.visits += 1;
@@ -488,7 +489,8 @@ pub struct SolveParams {
     #[serde(default)]
     pub prior_weight: f64,
     /// Two players: end each playout once the stock is empty and score the
-    /// hands with [`eval`] instead of playing on.
+    /// hands with [`eval`] instead of playing on - where the hands are of
+    /// similar size (see [`eval::in_range`]); others are played out.
     #[serde(default)]
     pub cutoff: bool,
     /// Below the root, search only this many moves at each decision - the
@@ -505,6 +507,9 @@ pub struct SolveParams {
     /// soon as one turns out too big to solve.
     #[serde(default)]
     pub shared_tree: bool,
+    /// How the imagined players behave and how their games are scored.
+    #[serde(default)]
+    pub style: policy::Style,
 }
 
 impl Default for SolveParams {
@@ -522,6 +527,7 @@ impl Default for SolveParams {
             candidates: 0,
             candidates_min_stock: 0,
             shared_tree: false,
+            style: policy::Style::default(),
         }
     }
 }
@@ -540,8 +546,10 @@ impl SolveParams {
             // sends the rest of the search to the tree.
             exact_nodes: 1_000_000,
             exact_stock: 4,
-            // Once the stock is empty, score the hands (trumps, cards that
-            // cannot be beaten) instead of playing on.
+            // Once the stock is empty and the hands are of similar size,
+            // score them (trumps, cards that cannot be beaten) instead of
+            // playing on. Very unequal hands are played out: there the score
+            // counts cards and misreads a player who collected the high ones.
             cutoff: true,
             ..Self::default()
         }

@@ -8,7 +8,8 @@
 //! The heuristic player gives every legal move a cost and plays the cheapest,
 //! the way a sensible beginner would: lead and throw in low cards, beat with
 //! the lowest card that works, keep trumps while the stock is large and take
-//! a small pile rather than spend one. Now and then it plays a random move
+//! a small pile rather than spend one; once nothing is left to draw, add
+//! everything that can be added. Now and then it plays a random move
 //! instead, so playouts still cover other lines.
 
 use rand::Rng;
@@ -27,6 +28,23 @@ pub enum Playout {
     Heuristic,
 }
 
+/// How the imagined players and the scoring of their games behave, beyond
+/// [`Playout`]. The default is what the app uses; the other settings exist
+/// so the arena can measure one against another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Style {
+    /// Score the hands when the stock runs out (see `eval`) whatever their
+    /// sizes, as before version 0.3.2. Normally only hands of similar size
+    /// are scored and the rest are played out (see `eval::in_range`).
+    #[serde(default)]
+    pub score_unequal: bool,
+    /// Two players, nothing left to draw: the heuristic player adds and
+    /// throws in plain cards only and holds its trumps back, as before
+    /// version 0.3.2. Normally it then adds every card it can.
+    #[serde(default)]
+    pub hold_trumps: bool,
+}
+
 /// Chance that the heuristic player makes a random move instead.
 pub const RANDOM_MOVE_CHANCE: f64 = 0.1;
 
@@ -38,11 +56,21 @@ fn worth(card: &Card, trump: Suit) -> i32 {
     card.rank() as i32 + if card.suit() == trump { TRUMP_BONUS } else { 0 }
 }
 
+/// Above the worth of any card.
+const ALL_CARDS: i32 = 99;
+
 /// Cards worth less than this are thrown in rather than kept.
 fn throw_limit(state: &GameState) -> i32 {
     if state.stock.is_empty() {
-        // Nothing left to draw: get rid of every plain card.
-        Rank::Ace as i32 + 1
+        // Nothing left to draw: get rid of every card that can go - in a
+        // two-player game the trumps too. Measured against perfect play
+        // (`examples/evalfit.rs`), games played out this way name the winner
+        // more often than with the trumps held back.
+        if state.num_players() == 2 {
+            ALL_CARDS
+        } else {
+            Rank::Ace as i32 + 1
+        }
     } else {
         Rank::Queen as i32
     }

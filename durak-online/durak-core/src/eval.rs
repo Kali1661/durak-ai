@@ -48,3 +48,22 @@ pub fn attacker_wins(s: &GameState) -> f64 {
     let z: f64 = features(s).iter().zip(WEIGHTS).map(|(x, w)| x * w).sum();
     1.0 / (1.0 + (-z).exp())
 }
+
+/// The score is only used for positions like the ones it could be checked
+/// on: at most this many cards in the two hands together...
+pub const MAX_CARDS: usize = 14;
+/// ...and at most this many more in one hand than in the other. Beyond that
+/// the count of cards misleads: a player who has picked up the high cards on
+/// purpose holds many and still wins, and such positions are too big to solve,
+/// so the formula could never learn them. They are played out instead.
+pub const MAX_DIFFERENCE: usize = 3;
+
+/// Is this a position the score can be trusted on?
+pub fn in_range(s: &GameState) -> bool {
+    hands_in_range(s.hands[s.attacker.index()].len(), s.hands[s.defender.index()].len())
+}
+
+/// [`in_range`] by the number of cards in each hand.
+pub fn hands_in_range(a: usize, b: usize) -> bool {
+    a + b <= MAX_CARDS && a.abs_diff(b) <= MAX_DIFFERENCE
+}

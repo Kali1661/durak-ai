@@ -104,7 +104,9 @@ is shown so you can judge how settled it is, and "Search longer" adds more.
 In two-player games the search also reads the opponent's play: a player who
 stops adding cards probably holds none of the ranks on the table, one who
 picks up a card rather than beat it probably has nothing higher in that suit.
-Such cards are then dealt to their hand less often. And when you have laid a
+Such cards are then dealt to their hand less often. Picking up counts once,
+however often it happens: some players pick cards up on purpose to keep their
+high cards, and doing it again says nothing new. And when you have laid a
 card and hold another you could lay with it, the suggestions cover that
 choice too - two cards of a rank at once can win where one at a time loses.
 **Calculated results.** In a two-player game, once no cards are hidden - the

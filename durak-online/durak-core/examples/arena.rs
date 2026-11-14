@@ -10,11 +10,15 @@
 //! (search with heuristic playouts). Search settings follow a colon, e.g.
 //! `mcts-h:prior=1,xnodes=100000,xstock=6,c=1.41,cut=1,d=64,p=250,k=3,kstock=6,tree=1` (see `engine`;
 //! `d` and `p` give that engine its own deals and playouts per search).
+//! `inf=1` guesses the opponent's hand; `uneq=1`, `hold=1` and `oldinf=1`
+//! bring back how hands were scored, how the imagined players added cards
+//! and how hands were guessed before version 0.3.2, for comparison.
 //!
 //! `match` plays every deal once per seat for A, so both sides get the same
 //! cards, and reports A's results with a 95% margin. In two-player games both
 //! engines switch to the exact solver once nothing is left to draw (as the app
-//! does), so only play before that differs.
+//! does), so only play before that differs - unless `ARENA_OWN_ENDGAME` is
+//! set: then each search engine plays the end by its own search too.
 //!
 //! `positions` shows what both kinds of search suggest in recorded positions
 //! (see `examples/data/positions.txt`).
@@ -55,6 +59,12 @@ struct Search {
     tree: bool,
     /// Guess the opponent's hand from their play (two players).
     inf: bool,
+    /// Score hands of any size when the stock runs out (as before 0.3.2).
+    uneq: bool,
+    /// With nothing left to draw the imagined players hold their trumps back (as before 0.3.2).
+    hold: bool,
+    /// Hand-guessing as before 0.3.2: takes add up, at strength 0.5.
+    oldinf: bool,
 }
 
 /// `random`, `rules`, `mcts` (random playouts), `mcts-h` (heuristic
@@ -68,7 +78,7 @@ fn engine(spec: &str) -> Engine {
         "mcts-h" => Playout::Heuristic,
         other => panic!("unknown engine {other}; use random, rules, mcts or mcts-h"),
     };
-    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false };
+    let mut e = Search { playout, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false, uneq: false, hold: false, oldinf: false };
     for kv in opts.split(',').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').expect("settings look like key=value");
         match k {
@@ -83,6 +93,9 @@ fn engine(spec: &str) -> Engine {
             "kstock" => e.kstock = v.parse().unwrap(),
             "tree" => e.tree = v == "1",
             "inf" => e.inf = v == "1",
+            "uneq" => e.uneq = v == "1",
+            "hold" => e.hold = v == "1",
+            "oldinf" => e.oldinf = v == "1",
             other => panic!("unknown setting {other}"),
         }
     }
@@ -97,8 +110,16 @@ struct Effort {
 
 const EXACT_NODES: u64 = 300_000;
 
+/// With `ARENA_OWN_ENDGAME` set, each engine plays the end of the game by
+/// its own search (with whatever exact solving its settings give it), as the
+/// app does - so differences in how positions with an empty stock are judged
+/// show up too.
+fn own_endgame() -> bool {
+    std::env::var("ARENA_OWN_ENDGAME").is_ok()
+}
+
 fn choose(state: &GameState, e: Engine, effort: Effort, seed: u64, beliefs: &Beliefs) -> Action {
-    if state.num_players() == 2 && is_exactly_solvable(state) {
+    if state.num_players() == 2 && is_exactly_solvable(state) && !(own_endgame() && matches!(e, Engine::Search(_))) {
         if let Some(a) = exact_choice(state, effort, seed) {
             return a;
         }
@@ -128,7 +149,7 @@ fn exact_choice(state: &GameState, effort: Effort, seed: u64) -> Option<Action> 
         return Some(r.actions[0].action.clone());
     }
     // The same search for both engines here, so the endgame is a level field.
-    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false };
+    let plain = Search { playout: Playout::Heuristic, prior: 0.0, exact_nodes: 0, exact_stock: 0, exploration: 1.41, cutoff: false, deals: 0, playouts: 0, candidates: 0, kstock: 0, tree: false, inf: false, uneq: false, hold: false, oldinf: false };
     Some(search(state, plain, effort, seed, Some(&safe), None))
 }
 
@@ -145,6 +166,7 @@ fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<
         candidates: e.candidates,
         candidates_min_stock: e.kstock,
         shared_tree: e.tree,
+        style: durak_core::Style { score_unequal: e.uneq, hold_trumps: e.hold },
         ..SolveParams::default()
     };
     let r = durak_core::Search::new(state, params, seed)
@@ -164,7 +186,13 @@ fn search(state: &GameState, e: Search, effort: Effort, seed: u64, only: Option<
 fn play(seed: u64, config: GameConfig, seats: &[Engine], effort: Effort) -> Outcome {
     let mut s = GameState::new_computer_game(seed, config).expect("valid config");
     // What each seat has learned about the other's hand (two players).
-    let mut beliefs = [Beliefs::default(), Beliefs::default()];
+    let strength = |e: Engine| match e {
+        Engine::Search(Search { oldinf: true, .. }) => {
+            durak_core::Strength { take_same_suit: 0.5, take_stacks: true, ..Default::default() }
+        }
+        _ => durak_core::Strength::default(),
+    };
+    let mut beliefs = [Beliefs::new(strength(seats[0])), Beliefs::new(strength(seats[seats.len().min(2) - 1]))];
     for ply in 0..3000u64 {
         if s.is_terminal() {
             return s.outcome();

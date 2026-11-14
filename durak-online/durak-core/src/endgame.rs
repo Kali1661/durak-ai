@@ -337,6 +337,8 @@ struct Rules {
     /// The stock in drawing order from the bottom (the face-up trump card
     /// first); cards are drawn from the top, the end of what is left.
     stock: [u64; MAX_STOCK],
+    /// How playouts are played and scored (not a rule of the game).
+    style: crate::Style,
 }
 
 /// Largest stock a two-player game can have (52 cards, 12 dealt).
@@ -356,6 +358,7 @@ impl Rules {
             classic_ending: s.config.classic_ending,
             cards_per_attack: s.config.cards_per_attack,
             stock,
+            style: crate::Style::default(),
         }
     }
 }
@@ -1029,7 +1032,11 @@ impl Pos {
         let d = 1 - a;
         let trump_cards = RANKS << (rules.trump * 13);
         // Cards worth less than this are added to an attack rather than kept.
-        let limit = if self.stock == 0 { 15 } else { 12 };
+        let limit = match self.stock {
+            0 if rules.style.hold_trumps => 15,
+            0 => 99,
+            _ => 12,
+        };
 
         match self.phase {
             ATTACKING | ADDING => {
@@ -1198,12 +1205,26 @@ pub(crate) fn fast_playout(
     rng: &mut impl rand::Rng,
     cutoff: bool,
     max_depth: u32,
+    style: crate::Style,
 ) -> Option<([f64; 2], bool)> {
     if state.num_players() != 2 || state.stock.len() > MAX_STOCK || !state.is_fully_known() {
         return None;
     }
     let mut moves = Vec::with_capacity(48);
-    Some(play_out(Pos::from_state(state), &Rules::of(state), rng, cutoff, max_depth, &mut moves))
+    let rules = Rules { style, ..Rules::of(state) };
+    Some(play_out(Pos::from_state(state), &rules, rng, cutoff, max_depth, &mut moves))
+}
+
+/// For measuring (`examples/evalfit.rs`): the share of `playouts` played
+/// right to the end that the player to move does not lose.
+#[doc(hidden)]
+pub fn playout_share(state: &GameState, playouts: u32, rng: &mut impl rand::Rng, style: crate::Style) -> Option<f64> {
+    let me = state.actor_to_move().index();
+    let mut sum = 0.0;
+    for _ in 0..playouts {
+        sum += fast_playout(state, rng, false, 400, style)?.0[me];
+    }
+    Some(sum / f64::from(playouts.max(1)))
 }
 
 /// [`fast_playout`] from a compact position; `moves` is scratch space.
@@ -1228,7 +1249,13 @@ fn play_out(
         if depth >= max_depth {
             return ([0.5, 0.5], true);
         }
-        if cutoff && pos.stock == 0 && pos.phase == ATTACKING && pos.atk == 0 {
+        if cutoff
+            && pos.stock == 0
+            && pos.phase == ATTACKING
+            && pos.atk == 0
+            && (rules.style.score_unequal
+                || crate::eval::hands_in_range(pos.hand[0].count_ones() as usize, pos.hand[1].count_ones() as usize))
+        {
             let p = pos.attacker_wins(rules);
             return (if pos.attacker == 0 { [p, 1.0 - p] } else { [1.0 - p, p] }, false);
         }
@@ -1352,7 +1379,7 @@ impl FastTree {
         for (h, i) in &hand_slots {
             seen.hand[*h] &= !bit(&dealt.hands[*h][*i]);
         }
-        let rules = Rules::of(&dealt);
+        let rules = Rules { style: params.style, ..Rules::of(&dealt) };
 
         // My moves by the real rules, matched to the moves of the compact
         // position by where they lead. (They do not depend on the deal.)

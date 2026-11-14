@@ -99,7 +99,7 @@ fn play(seed: u64, config: GameConfig, search: bool) -> Tally {
         }
         let base = hand.len() as f64 / unseen as f64;
         // Note what each rule points at with full-strength rules...
-        let mut probe = Beliefs::new(Strength { take_same_suit: 0.5, take_trump: 0.5, lead_lower: 0.5, lead_trump_plain: 0.5, stop_low: 0.5, stop_high: 0.5 });
+        let mut probe = Beliefs::new(Strength { take_same_suit: 0.5, take_trump: 0.5, lead_lower: 0.5, lead_trump_plain: 0.5, stop_low: 0.5, stop_high: 0.5, take_stacks: true });
         probe.observe_with(PlayerId::P0, &before, &action, &s, &mut |kind, id| {
             let k = KINDS.iter().position(|x| *x == kind).unwrap();
             if hand.contains(&id) {

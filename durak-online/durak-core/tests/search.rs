@@ -301,3 +301,22 @@ fn deals_too_big_to_solve_go_to_the_shared_tree() {
         assert_eq!(r.total_visits, 600);
     }
 }
+
+#[test]
+fn few_cards_against_a_hoard_of_high_cards_is_not_a_sure_win() {
+    // From a real game (24 cards, nothing left to draw): I hold five small
+    // cards, the opponent nineteen with the four top trumps. Scoring the
+    // hands by counting cards called this 99% for me; the game was lost, and
+    // a few moves later the position was a proven loss. Hands this unequal
+    // are played out instead of scored.
+    let s: GameState = serde_json::from_str(include_str!("data/few-cards-against-a-hoard.json")).unwrap();
+    assert!(!eval::in_range(&s));
+    let p = SolveParams { determinizations: 4, rollouts: 2000, ..SolveParams::app() };
+    let now = solve(&s, p, 3).unwrap().actions[0].score;
+    let mut old = p;
+    old.style.score_unequal = true;
+    let before = solve(&s, old, 3).unwrap().actions[0].score;
+    assert!(before > 0.95, "the old scoring showed {before}");
+    // A short search is still too hopeful; a long one settles near 30%.
+    assert!(now < before - 0.1, "shown {now}, before {before}");
+}

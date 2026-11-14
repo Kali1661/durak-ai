@@ -122,3 +122,37 @@ fn a_search_can_use_beliefs() {
     assert_eq!(r.total_visits, 400);
     assert!(r.actions.iter().all(|a| (0.0..=1.0).contains(&a.score)));
 }
+
+#[test]
+fn taking_again_and_again_says_nothing_new() {
+    // An opponent who picks cards up on purpose does it repeatedly; the
+    // cards they "cannot beat" must not sink lower with every take.
+    let found = (1..200).find_map(|seed| {
+        play_until(game(seed), |before, a| {
+            *a == Action::Take
+                && before.actor_to_move() == PlayerId::P1
+                && before.table.len() == 1
+                && before.table[0].attack.id().is_some_and(|(suit, rank)| suit != before.trump && rank < Rank::Queen)
+        })
+    });
+    let (before, action, after) = found.expect("some game has such a take");
+    let (suit, _) = before.table[0].attack.id().unwrap();
+    let ace = (suit, Rank::Ace);
+
+    let mut once = Beliefs::default();
+    once.observe(PlayerId::P0, &before, &action, &after);
+    let mut thrice = once.clone();
+    thrice.observe(PlayerId::P0, &before, &action, &after);
+    thrice.observe(PlayerId::P0, &before, &action, &after);
+    assert!(once.weight(ace) < 1.0);
+    assert_eq!(once.weight(ace), thrice.weight(ace));
+    assert_eq!(once.weight((before.trump, Rank::Ace)), thrice.weight((before.trump, Rank::Ace)));
+
+    // The old behaviour, kept for comparisons, multiplies each time.
+    let stacking = Strength { take_stacks: true, ..Strength::default() };
+    let mut old = Beliefs::new(stacking);
+    old.observe(PlayerId::P0, &before, &action, &after);
+    let first = old.weight(ace);
+    old.observe(PlayerId::P0, &before, &action, &after);
+    assert!(old.weight(ace) < first);
+}

@@ -34,10 +34,10 @@ pub mod policy;
 
 #[doc(hidden)]
 pub use endgame::solve_exact_reference;
-pub use endgame::{fast_playout_probe, is_exactly_solvable, solve_exact, solve_exact_deal, ExactAction, ExactResult, ExactValue};
+pub use endgame::{fast_playout_probe, playout_share, is_exactly_solvable, solve_exact, solve_exact_deal, ExactAction, ExactResult, ExactValue};
 
 pub use belief::{Beliefs, Evidence, Strength};
-pub use policy::Playout;
+pub use policy::{Playout, Style};
 pub use mcts::{Search, SharedTree, MAX_TREE_NODES,
     mcts_evaluate_actions, solve, ActionEval, MctsEval, SolveParams, SolveResult,
     MAX_DETERMINIZATIONS, MAX_ROLLOUTS, MAX_SEARCH_DEPTH,

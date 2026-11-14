@@ -14,7 +14,8 @@
 //! they fade as the opponent draws new cards.
 //!
 //! The strength of each kind of evidence ([`Strength`]) was measured on
-//! games between the search engine and itself (see the `beliefs` example).
+//! games between the search engine and itself (the `beliefs` example) and on
+//! recorded games against real opponents (the `realgames` example).
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +46,13 @@ pub struct Strength {
     pub stop_low: f32,
     /// ...and high ones (jack and up).
     pub stop_high: f32,
+    /// Every take counts again, so a card can be pushed down take after
+    /// take (as before version 0.3.2). Normally taking only ever lowers a
+    /// card to the take strength, however often it happens: an opponent who
+    /// picks cards up on purpose, to keep their high cards, does it again
+    /// and again, and each time says nothing new.
+    #[serde(default)]
+    pub take_stacks: bool,
 }
 
 impl Default for Strength {
@@ -52,12 +60,15 @@ impl Default for Strength {
         Strength {
             // Measured weights (the `beliefs` example, 36 cards, passing):
             // against a player following simple rules / against the search.
-            take_same_suit: 0.5,   // 0.25 / 0.87
-            take_trump: 0.85,      // 0.72 / 1.05
-            lead_lower: 0.5,       // 0.00 / 0.79
-            lead_trump_plain: 0.5, // 0.00 / 0.86
-            stop_low: 0.2,         // 0.00 / 0.18
-            stop_high: 0.6,        // 1.17 / 0.37
+            // The third number: in 193 recorded games against real
+            // opponents (the `realgames` example, 24 cards).
+            take_same_suit: 0.65,  // 0.25 / 0.87 / 0.63
+            take_trump: 0.85,      // 0.72 / 1.05 / 0.82
+            lead_lower: 0.5,       // 0.00 / 0.79 / 0.22
+            lead_trump_plain: 0.5, // 0.00 / 0.86 / -
+            stop_low: 0.2,         // 0.00 / 0.18 / 0.00
+            stop_high: 0.6,        // 1.17 / 0.37 / 0.35
+            take_stacks: false,
         }
     }
 }
@@ -65,7 +76,7 @@ impl Default for Strength {
 impl Strength {
     /// Evidence switched off: every weight stays 1.
     pub fn none() -> Self {
-        Strength { take_same_suit: 1.0, take_trump: 1.0, lead_lower: 1.0, lead_trump_plain: 1.0, stop_low: 1.0, stop_high: 1.0 }
+        Strength { take_same_suit: 1.0, take_trump: 1.0, lead_lower: 1.0, lead_trump_plain: 1.0, stop_low: 1.0, stop_high: 1.0, take_stacks: false }
     }
 }
 
@@ -116,6 +127,12 @@ impl Beliefs {
         }
     }
 
+    fn lower_to(&mut self, id: CardId, level: f32) {
+        if let Some(w) = self.weights.get_mut(slot(id)) {
+            *w = w.min(level.max(FLOOR));
+        }
+    }
+
     /// Learn from one move of a two-player game, seen by `me`: `before` is
     /// the position it was made in, `after` the position it led to. My own
     /// moves teach nothing about the opponent, but cards drawn afterwards
@@ -150,7 +167,12 @@ impl Beliefs {
                 .collect();
             let mut touch = |beliefs: &mut Self, kind: Evidence, id: CardId, factor: f32| {
                 if factor < 1.0 {
-                    beliefs.scale(id, factor);
+                    let taking = matches!(kind, Evidence::TakeSameSuit | Evidence::TakeTrump);
+                    if taking && !s.take_stacks {
+                        beliefs.lower_to(id, factor);
+                    } else {
+                        beliefs.scale(id, factor);
+                    }
                     note(kind, id);
                 }
             };

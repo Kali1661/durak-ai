@@ -110,7 +110,9 @@ aby si vedel posúdiť, nakoľko je ustálené; tlačidlo „Search longer" ich 
 V hre dvoch hráčov vyhľadávanie číta aj súperovu hru: kto prestane prikladať,
 ten pravdepodobne nemá karty hodnôt, ktoré sú na stole; kto kartu radšej
 zoberie, než by ju pobil, pravdepodobne nemá vyššiu v tej istej farbe. Také
-karty sa mu potom rozdávajú zriedkavejšie. A keď si vyložil kartu a držíš
+karty sa mu potom rozdávajú zriedkavejšie. Zobratie kariet sa počíta raz, nech
+sa stane koľkokoľvek ráz: niektorí hráči berú karty zámerne, aby si nechali
+vysoké, a keď to spravia znova, nič nové to nehovorí. A keď si vyložil kartu a držíš
 ďalšiu, ktorú by si mohol priložiť hneď, odporúčania pokrývajú aj túto voľbu -
 dve karty rovnakej hodnoty naraz môžu vyhrať tam, kde po jednej prehrajú.
 **Vypočítané výsledky.** V hre dvoch hráčov, keď už nie sú žiadne skryté karty -

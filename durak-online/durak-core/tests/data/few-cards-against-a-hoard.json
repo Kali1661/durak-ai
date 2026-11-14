@@ -1,0 +1,152 @@
+{
+ "trump": "Spades",
+ "attacker": "P0",
+ "defender": "P1",
+ "phase": "Attacking",
+ "attackers": [
+  "P0"
+ ],
+ "current_attacker_idx": 0,
+ "last_played_attacker": "P0",
+ "throw_start_idx": 0,
+ "hands": [
+  [
+   {
+    "type": "private",
+    "suit": "Spades",
+    "rank": "Queen"
+   },
+   {
+    "type": "private",
+    "suit": "Hearts",
+    "rank": "Nine"
+   },
+   {
+    "type": "private",
+    "suit": "Clubs",
+    "rank": "Queen"
+   },
+   {
+    "type": "private",
+    "suit": "Clubs",
+    "rank": "Nine"
+   },
+   {
+    "type": "public",
+    "suit": "Spades",
+    "rank": "Ten"
+   }
+  ],
+  [
+   {
+    "type": "public",
+    "suit": "Spades",
+    "rank": "Nine"
+   },
+   {
+    "type": "public",
+    "suit": "Hearts",
+    "rank": "Queen"
+   },
+   {
+    "type": "public",
+    "suit": "Hearts",
+    "rank": "Ace"
+   },
+   {
+    "type": "public",
+    "suit": "Spades",
+    "rank": "Ace"
+   },
+   {
+    "type": "public",
+    "suit": "Spades",
+    "rank": "King"
+   },
+   {
+    "type": "public",
+    "suit": "Diamonds",
+    "rank": "Nine"
+   },
+   {
+    "type": "public",
+    "suit": "Clubs",
+    "rank": "Ten"
+   },
+   {
+    "type": "public",
+    "suit": "Clubs",
+    "rank": "Jack"
+   },
+   {
+    "type": "public",
+    "suit": "Hearts",
+    "rank": "Ten"
+   },
+   {
+    "type": "public",
+    "suit": "Hearts",
+    "rank": "Jack"
+   },
+   {
+    "type": "public",
+    "suit": "Diamonds",
+    "rank": "Ten"
+   },
+   {
+    "type": "public",
+    "suit": "Diamonds",
+    "rank": "Jack"
+   },
+   {
+    "type": "public",
+    "suit": "Spades",
+    "rank": "Jack"
+   },
+   {
+    "type": "public",
+    "suit": "Diamonds",
+    "rank": "Queen"
+   },
+   {
+    "type": "public",
+    "suit": "Diamonds",
+    "rank": "Ace"
+   },
+   {
+    "type": "public",
+    "suit": "Clubs",
+    "rank": "Ace"
+   },
+   {
+    "type": "public",
+    "suit": "Clubs",
+    "rank": "King"
+   },
+   {
+    "type": "public",
+    "suit": "Hearts",
+    "rank": "King"
+   },
+   {
+    "type": "public",
+    "suit": "Diamonds",
+    "rank": "King"
+   }
+  ]
+ ],
+ "stock": [],
+ "table": [],
+ "discard": [],
+ "reflected_trumps": [],
+ "batch": 0,
+ "config": {
+  "deck_size": 24,
+  "num_players": 2,
+  "trump_reflecting": false,
+  "first_trick_limit": true,
+  "classic_ending": true,
+  "reflecting": true,
+  "cards_per_attack": 6
+ }
+}
